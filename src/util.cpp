@@ -1212,10 +1212,10 @@ std::string CopyrightHolders(const std::string& strPrefix)
     if (strprintf(COPYRIGHT_HOLDERS, COPYRIGHT_HOLDERS_SUBSTITUTION).find("Bitcoin Core") == std::string::npos) {
         strCopyrightHolders.replace(strCopyrightHolders.find("2009"), sizeof("2009")-1, "2019"); 
         std::string strPrefix1 = strPrefix;
-        strPrefix1.replace(strPrefix1.find("2020"), sizeof("2020")-1, "2019");
+        strPrefix1.replace(strPrefix1.find("2021"), sizeof("2021")-1, "2019");
         strCopyrightHolders += "\n" + strPrefix1 + "The Dogecoin Core developers";
         std::string strPrefix2 = strPrefix;
-        strPrefix2.replace(strPrefix2.find("2020"), sizeof("2020")-1, "2018");
+        strPrefix2.replace(strPrefix2.find("2021"), sizeof("2021")-1, "2018");
         strCopyrightHolders += "\n" + strPrefix2 + "The Bitcoin Core developers";
     }
     return strCopyrightHolders;
