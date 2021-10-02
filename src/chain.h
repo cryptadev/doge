@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,6 +13,7 @@
 #include <primitives/block.h>
 #include <tinyformat.h>
 #include <uint256.h>
+#include <chainparams.h>
 
 #include <vector>
 
@@ -160,8 +161,6 @@ enum BlockStatus: uint32_t {
     BLOCK_FAILED_VALID       =   32, //!< stage after last reached validness failed
     BLOCK_FAILED_CHILD       =   64, //!< descends from failed block
     BLOCK_FAILED_MASK        =   BLOCK_FAILED_VALID | BLOCK_FAILED_CHILD,
-
-    BLOCK_OPT_WITNESS       =   128, //!< block data in blk*.data was received with a witness-enforcing client
 };
 
 /** The block chain is a tree shaped structure starting with the
@@ -194,7 +193,19 @@ public:
     unsigned int nUndoPos;
 
     //! (memory only) Total amount of work (expected number of hashes) in the chain up to and including this block
-    arith_uint256 nChainWork;
+    uint32_t _nChainWork[4];
+
+    arith_uint256 nChainWork () const {
+        arith_uint256 ret(0);
+        ret.set_data(0, _nChainWork[0]);        ret.set_data(1, _nChainWork[1]);
+        ret.set_data(2, _nChainWork[2]);        ret.set_data(3, _nChainWork[3]);
+        return ret;
+    }
+
+    void nChainWork_set (const arith_uint256& nChainWork) {
+        _nChainWork[0] = nChainWork.get_data(0);        _nChainWork[1] = nChainWork.get_data(1);
+        _nChainWork[2] = nChainWork.get_data(2);        _nChainWork[3] = nChainWork.get_data(3);
+    }
 
     //! Number of transactions in this block.
     //! Note: in a potential headers-first mode, this number cannot be relied upon
@@ -215,9 +226,6 @@ public:
     uint32_t nBits;
     uint32_t nNonce;
 
-    //! (memory only) Sequential id assigned to distinguish order in which blocks are received.
-    int32_t nSequenceId;
-
     void SetNull()
     {
         phashBlock = nullptr;
@@ -227,11 +235,10 @@ public:
         nFile = 0;
         nDataPos = 0;
         nUndoPos = 0;
-        nChainWork = arith_uint256();
+        _nChainWork[0] = _nChainWork[1] = _nChainWork[2] = _nChainWork[3] = 0;
         nTx = 0;
         nChainTx = 0;
         nStatus = 0;
-        nSequenceId = 0;
 
         nVersion       = 0;
         hashMerkleRoot = uint256();
@@ -245,15 +252,11 @@ public:
         SetNull();
     }
 
-    explicit CBlockIndex(const CBlockHeader& block)
-    {
-        SetNull();
+    void SetBlockHeader (const CBlockHeader& header);
 
-        nVersion       = block.nVersion;
-        hashMerkleRoot = block.hashMerkleRoot;
-        nTime          = block.nTime;
-        nBits          = block.nBits;
-        nNonce         = block.nNonce;
+    explicit CBlockIndex(const CBlockHeader& block) {
+        SetNull();
+        SetBlockHeader (block);
     }
 
     CDiskBlockPos GetBlockPos() const {
@@ -428,58 +431,52 @@ public:
 /** An in-memory indexed chain of blocks. */
 class CChain {
 private:
-    std::vector<CBlockIndex*> vChain;
+    CBlockIndex* pBestBlock;
 
 public:
     /** Returns the index entry for the genesis block of this chain, or nullptr if none. */
     CBlockIndex *Genesis() const {
-        return vChain.size() > 0 ? vChain[0] : nullptr;
+        return pBestBlock ? pBestBlock->GetAncestor(0) : nullptr;
     }
 
     /** Returns the index entry for the tip of this chain, or nullptr if none. */
     CBlockIndex *Tip() const {
-        return vChain.size() > 0 ? vChain[vChain.size() - 1] : nullptr;
+        return pBestBlock;
     }
 
     /** Returns the index entry at a particular height in this chain, or nullptr if no such height exists. */
     CBlockIndex *operator[](int nHeight) const {
-        if (nHeight < 0 || nHeight >= (int)vChain.size())
-            return nullptr;
-        return vChain[nHeight];
-    }
-
-    /** Compare two chains efficiently. */
-    friend bool operator==(const CChain &a, const CChain &b) {
-        return a.vChain.size() == b.vChain.size() &&
-               a.vChain[a.vChain.size() - 1] == b.vChain[b.vChain.size() - 1];
+        return pBestBlock ? pBestBlock->GetAncestor(nHeight) : nullptr;
     }
 
     /** Efficiently check whether a block is present in this chain. */
     bool Contains(const CBlockIndex *pindex) const {
-        return (*this)[pindex->nHeight] == pindex;
+        if (pindex == nullptr) return false;
+        return pBestBlock ? pBestBlock->GetAncestor(pindex->nHeight) == pindex : false;
     }
 
     /** Find the successor of a block in this chain, or nullptr if the given index is not found or is the tip. */
     CBlockIndex *Next(const CBlockIndex *pindex) const {
-        if (Contains(pindex))
-            return (*this)[pindex->nHeight + 1];
-        else
-            return nullptr;
+        if (pindex == nullptr) return nullptr;
+        return pBestBlock ? pBestBlock->GetAncestor(pindex->nHeight + 1) : nullptr;
     }
 
     /** Return the maximal height in the chain. Is equal to chain.Tip() ? chain.Tip()->nHeight : -1. */
     int Height() const {
-        return vChain.size() - 1;
+        return pBestBlock ? pBestBlock->nHeight : -1;
     }
 
     /** Set/initialize a chain with a given tip. */
-    void SetTip(CBlockIndex *pindex);
+    void SetTip(CBlockIndex *pindex) {
+        pBestBlock = pindex;
+    }
 
     /** Return a CBlockLocator that refers to a block in this chain (by default the tip). */
     CBlockLocator GetLocator(const CBlockIndex *pindex = nullptr) const;
 
     /** Find the last common block between this chain and a block index entry. */
     const CBlockIndex *FindFork(const CBlockIndex *pindex) const;
+    CBlockIndex* FindFork(const CBlockLocator& locator) const;
 
     /** Find the earliest block with timestamp equal or greater than the given. */
     CBlockIndex* FindEarliestAtLeast(int64_t nTime) const;

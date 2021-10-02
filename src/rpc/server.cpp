@@ -1,7 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge 
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -561,3 +560,21 @@ int RPCSerializationFlags()
 }
 
 CRPCTable tableRPC;
+
+bool toInt32 (const JSONRPCRequest& request, int idx, uint32_t& val, UniValue& ret) {
+	if (!request.params[idx].isNull()) {
+		int a = val;
+		if (ParseInt32(request.params[idx].get_str(), &a)) { val = a; return true; }
+		ret.pushKV("error", strprintf("params %d is not int32 value", idx+1));
+		return false;
+    } else return true;	
+}
+
+bool toInt64 (const JSONRPCRequest& request, int idx, uint64_t& val, UniValue& ret) {
+	if (!request.params[idx].isNull()) {
+		int64_t a = val;
+		if (ParseInt64(request.params[idx].get_str(), &a)) { val = a; return true; }
+		ret.pushKV("error", strprintf("params %d is not int64 value", idx+1));
+		return false;
+    } else return true;	
+}

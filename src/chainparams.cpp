@@ -1,7 +1,7 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -69,11 +69,9 @@ public:
     CMainParams() {
         strNetworkID = "main";
         consensus.nSubsidyHalvingInterval = 100000;
-        consensus.nMajorityEnforceBlockUpgrade = 1500;
-        consensus.nMajorityRejectBlockOutdated = 1900;
-        consensus.nMajorityWindow = 2000;
         consensus.BIP34Height = 1034383;
         consensus.BIP34Hash = uint256S("0x80d1364201e5df97e696c03bdd24dc885e8617b9de51e453c10a4f629b1e797a");
+        consensus.BIP65Height = 3464751; // 34cd2cbba4ba366f47e5aa0db5f02c19eba2adf679ceb6653ac003bdc9a0ef1f - first v4 block after the last v3 block 
         consensus.BIP66Height = 1034383; // 80d1364201e5df97e696c03bdd24dc885e8617b9de51e453c10a4f629b1e797a - this is the last block that could be v2, 1900 blocks past the last v2 block
         consensus.powLimit = ~arith_uint256(0) >> 20;
         consensus.nPowTargetTimespanBegin = 4 * 60 * 60; // pre-digishield: 4 hours
@@ -152,13 +150,6 @@ public:
             }
         };
 
-        chainTxData = ChainTxData{
-            // Data from rpc: getchaintxstats 4096 77e3f4a4bcb4a2c15e8015525e3d15b466f6c022f6ca82698f329edef7d9777e (height 2510150)
-            /* nTime    */ 1544484077,
-            /* nTxCount */ 42797508,
-            /* dTxRate  */ 0.3125
-        };
-
         /* disable fallback fee on mainnet */
         m_fallback_fee_enabled = false;
     }
@@ -173,11 +164,9 @@ public:
         strNetworkID = "test";
 
         consensus.nSubsidyHalvingInterval = 100000;
-        consensus.nMajorityEnforceBlockUpgrade = 501;
-        consensus.nMajorityRejectBlockOutdated = 750;
-        consensus.nMajorityWindow = 1000;
         consensus.BIP34Height = 708658;
         consensus.BIP34Hash = uint256S("0x21b8b97dcdb94caa67c7f8f6dbf22e61e0cfe0e46e1fff3528b22864659e9b38");
+        consensus.BIP65Height = 1854705; // 955bd496d23790aba1ecfacb722b089a6ae7ddabaedf7d8fb0878f48308a71f9 
         consensus.BIP66Height = 708658; // 21b8b97dcdb94caa67c7f8f6dbf22e61e0cfe0e46e1fff3528b22864659e9b38 - this is the last block that could be v2, 1900 blocks past the last v2 block
         consensus.powLimit = ~arith_uint256(0) >> 20;
         consensus.nPowTargetTimespanBegin = 4 * 60 * 60; // pre-digishield: 4 hours
@@ -244,13 +233,6 @@ public:
             }
         };
 
-        chainTxData = ChainTxData{
-            // Data from rpc: getchaintxstats 4096 a2179767a87ee4e95944703976fee63578ec04fa3ac2fc1c9c2c83587d096977 (height 1202214)
-            /* nTime    */ 1514565123,
-            /* nTxCount */ 2005610,
-            /* dTxRate  */ 0.1
-        };
-
         /* enable fallback fee on testnet */
         m_fallback_fee_enabled = true;
     }
@@ -264,11 +246,9 @@ public:
     CRegTestParams() {
         strNetworkID = "regtest";
         consensus.nSubsidyHalvingInterval = 150;
-        consensus.nMajorityEnforceBlockUpgrade = 750;
-        consensus.nMajorityRejectBlockOutdated = 950;
-        consensus.nMajorityWindow = 1000;
         consensus.BIP34Height = 100000000; // BIP34 has not activated on regtest (far in the future so block v1 are not rejected in tests)
         consensus.BIP34Hash = uint256();
+        consensus.BIP65Height = 1251; // BIP65 activated on regtest (Used in rpc activation tests)
         consensus.BIP66Height = 1251; // BIP66 activated on regtest (Used in rpc activation tests)
         consensus.powLimit = ~arith_uint256(0) >> 1;
         consensus.nPowTargetTimespanBegin = 1;
@@ -315,12 +295,6 @@ public:
             {
                 {0, uint256S("0x3d2160a3b5dc4a9d62e7e66a295f70313ac808440ef7400d6c0772171ce973a5")},
             }
-        };
-
-        chainTxData = ChainTxData{
-            0,
-            0,
-            0
         };
 
         base58Prefixes[PUBKEY_ADDRESS] = std::vector<unsigned char>(1,111);

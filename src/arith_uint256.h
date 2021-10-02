@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -240,44 +240,13 @@ public:
      * value is zero.
      */
     unsigned int bits() const;
+    uint32_t get_data (int index) const { return pn[index]; }
+    void set_data (int index, uint32_t dat) { pn[index] = dat; }
 
     uint64_t GetLow64() const
     {
         static_assert(WIDTH >= 2, "Assertion WIDTH >= 2 failed (WIDTH = BITS / 32). BITS is a template parameter.");
         return pn[0] | (uint64_t)pn[1] << 32;
-    }
-    template<typename Stream>
-    void Serialize(Stream& s) const
-    {
-        base_uint n = *this;
-        unsigned char tmp, tmp2;
-        while (true) {
-            tmp = n.pn[0] & 0x7F;
-            n >>= 7;
-            tmp2 = n.pn[0] & 0x7F;
-            if (tmp2 != 0) tmp |= 0x80;
-            s.write((char*)&tmp, 1);
-            if (tmp2 == 0) break;
-        }
-    }
-
-    template<typename Stream>
-    void Unserialize(Stream& s)
-    {
-        unsigned char tmp[(BITS+6)/7];
-        int len=0;
-        while (true) {
-            s.read((char*)&tmp[len], 1);
-            if (!(tmp[len] & 0x80)) break;
-            len++;
-            if (len >= (BITS+6)/7) { throw uint_error("size too large"); }
-        }
-        base_uint& n = *this;
-        while (true) {
-            n <<= 7;
-            n |= tmp[len] & 0x7F;
-            if (len == 0) { break; } else { len--; }
-        }
     }
 };
 

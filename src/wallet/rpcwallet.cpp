@@ -1,7 +1,7 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,9 +13,9 @@
 #include <validation.h>
 #include <key_io.h>
 #include <net.h>
+#include <pow.h>
 #include <outputtype.h>
 #include <policy/feerate.h>
-#include <policy/fees.h>
 #include <policy/policy.h>
 #include <policy/rbf.h>
 #include <rpc/mining.h>
@@ -33,6 +33,7 @@
 #include <wallet/wallet.h>
 #include <wallet/walletdb.h>
 #include <wallet/walletutil.h>
+#include <miner.h>
 
 #include <stdint.h>
 
@@ -529,11 +530,6 @@ static UniValue sendtoaddress(const JSONRPCRequest& request)
             "5. subtractfeefromamount  (boolean, optional, default=false) The fee will be deducted from the amount being sent.\n"
             "                             The recipient will receive less coins than you enter in the amount field.\n"
             "6. replaceable            (boolean, optional) Allow this transaction to be replaced by a transaction with higher fees via BIP 125\n"
-            "7. conf_target            (numeric, optional) Confirmation target (in blocks)\n"
-            "8. \"estimate_mode\"      (string, optional, default=UNSET) The fee estimate mode, must be one of:\n"
-            "       \"UNSET\"\n"
-            "       \"ECONOMICAL\"\n"
-            "       \"CONSERVATIVE\"\n"
             "\nResult:\n"
             "\"txid\"                  (string) The transaction id.\n"
             "\nExamples:\n"
@@ -575,17 +571,6 @@ static UniValue sendtoaddress(const JSONRPCRequest& request)
     if (!request.params[5].isNull()) {
         coin_control.m_signal_bip125_rbf = request.params[5].get_bool();
     }
-
-    if (!request.params[6].isNull()) {
-        coin_control.m_confirm_target = ParseConfirmTarget(request.params[6]);
-    }
-
-    if (!request.params[7].isNull()) {
-        if (!FeeModeFromString(request.params[7].get_str(), coin_control.m_fee_mode)) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid estimate_mode parameter");
-        }
-    }
-
 
     EnsureWalletIsUnlocked(pwallet);
 
@@ -1185,11 +1170,6 @@ static UniValue sendmany(const JSONRPCRequest& request)
             "      ,...\n"
             "    ]\n"
             "6. replaceable            (boolean, optional) Allow this transaction to be replaced by a transaction with higher fees via BIP 125\n"
-            "7. conf_target            (numeric, optional) Confirmation target (in blocks)\n"
-            "8. \"estimate_mode\"      (string, optional, default=UNSET) The fee estimate mode, must be one of:\n"
-            "       \"UNSET\"\n"
-            "       \"ECONOMICAL\"\n"
-            "       \"CONSERVATIVE\"\n"
              "\nResult:\n"
             "\"txid\"                   (string) The transaction id for the send. Only 1 transaction is created regardless of \n"
             "                                    the number of addresses.\n"
@@ -1236,16 +1216,6 @@ static UniValue sendmany(const JSONRPCRequest& request)
     CCoinControl coin_control;
     if (!request.params[5].isNull()) {
         coin_control.m_signal_bip125_rbf = request.params[5].get_bool();
-    }
-
-    if (!request.params[6].isNull()) {
-        coin_control.m_confirm_target = ParseConfirmTarget(request.params[6]);
-    }
-
-    if (!request.params[7].isNull()) {
-        if (!FeeModeFromString(request.params[7].get_str(), coin_control.m_fee_mode)) {
-            throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid estimate_mode parameter");
-        }
     }
 
     std::set<CTxDestination> destinations;
@@ -3526,20 +3496,6 @@ void FundTransaction(CWallet* const pwallet, CMutableTransaction& tx, CAmount& f
         if (options.exists("replaceable")) {
             coinControl.m_signal_bip125_rbf = options["replaceable"].get_bool();
         }
-        if (options.exists("conf_target")) {
-            if (options.exists("feeRate")) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot specify both conf_target and feeRate");
-            }
-            coinControl.m_confirm_target = ParseConfirmTarget(options["conf_target"]);
-        }
-        if (options.exists("estimate_mode")) {
-            if (options.exists("feeRate")) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Cannot specify both estimate_mode and feeRate");
-            }
-            if (!FeeModeFromString(options["estimate_mode"].get_str(), coinControl.m_fee_mode)) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid estimate_mode parameter");
-            }
-        }
       }
     }
 
@@ -3806,8 +3762,6 @@ static UniValue bumpfee(const JSONRPCRequest& request)
 
         if (options.exists("confTarget") && options.exists("totalFee")) {
             throw JSONRPCError(RPC_INVALID_PARAMETER, "confTarget and totalFee options should not both be set. Please provide either a confirmation target for fee estimation or an explicit total fee for the transaction.");
-        } else if (options.exists("confTarget")) { // TODO: alias this to conf_target
-            coin_control.m_confirm_target = ParseConfirmTarget(options["confTarget"]);
         } else if (options.exists("totalFee")) {
             totalFee = options["totalFee"].get_int64();
             if (totalFee <= 0) {
@@ -3817,11 +3771,6 @@ static UniValue bumpfee(const JSONRPCRequest& request)
 
         if (options.exists("replaceable")) {
             coin_control.m_signal_bip125_rbf = options["replaceable"].get_bool();
-        }
-        if (options.exists("estimate_mode")) {
-            if (!FeeModeFromString(options["estimate_mode"].get_str(), coin_control.m_fee_mode)) {
-                throw JSONRPCError(RPC_INVALID_PARAMETER, "Invalid estimate_mode parameter");
-            }
         }
     }
 
@@ -4747,6 +4696,43 @@ UniValue walletcreatefundedpsbt(const JSONRPCRequest& request)
     return result;
 }
 
+UniValue getgenerate (const JSONRPCRequest& request) {
+    if (request.fHelp) {
+        throw std::runtime_error(
+            "getgenerate\n"
+            "\nReturn if the server is set to generate coins or not. The default is false.\n"
+            "It can be set with the setgenerate call.\n"
+            "\nExamples:\n"
+            + HelpExampleCli("getgenerate", "")
+            + HelpExampleRpc("getgenerate", "")
+        );
+    }
+    LOCK(cs_main);
+    UniValue result(UniValue::VOBJ);
+    int n = generateCoin (4096);
+    result.push_back(Pair("minerPOWCount", (n > 0) ? n : 0));
+    return result;
+}
+
+UniValue setgenerate (const JSONRPCRequest& request) {
+    if (request.fHelp || (request.params.size() != 1))
+        throw std::runtime_error(
+            "setgeneratepow count\n"
+            "1. count          (numeric) The number of generation thread(0 - 63)\n"
+            "\nExamples:\n"
+            "\nSet the generation on with a limit of one processor\n" + HelpExampleCli("setgeneratepow", "1") +
+            "\nCheck the setting\n" + HelpExampleCli("getgenerate", "") +
+            "\nTurn off generation\n" + HelpExampleCli("setgeneratepow", "0") +
+            "\nUsing json rpc\n" + HelpExampleRpc("setgeneratepow", "1"));
+    uint32_t cnt = 0;
+    UniValue ret(UniValue::VOBJ);
+    if (!toInt32 (request, 0, cnt, ret)) return ret;
+    ret.pushKV ("minerPOWRequest", (cnt > 0) ? (int)cnt : 0);
+    int n = generateCoin (cnt);
+    ret.pushKV ("minerPOWCount", (n > 0) ? n : 0);
+    return ret;
+}
+
 extern UniValue abortrescan(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue dumpprivkey(const JSONRPCRequest& request); // in rpcdump.cpp
 extern UniValue importprivkey(const JSONRPCRequest& request);
@@ -4758,6 +4744,8 @@ extern UniValue importprunedfunds(const JSONRPCRequest& request);
 extern UniValue removeprunedfunds(const JSONRPCRequest& request);
 extern UniValue importmulti(const JSONRPCRequest& request);
 extern UniValue rescanblockchain(const JSONRPCRequest& request);
+extern UniValue import_key (const JSONRPCRequest& request);
+extern UniValue import_tx (const JSONRPCRequest& request);
 
 static const CRPCCommand commands[] =
 { //  category              name                                actor (function)                argNames
@@ -4786,6 +4774,8 @@ static const CRPCCommand commands[] =
     { "wallet",             "getwalletinfo",                    &getwalletinfo,                 {} },
     { "wallet",             "importmulti",                      &importmulti,                   {"requests","options"} },
     { "wallet",             "importprivkey",                    &importprivkey,                 {"privkey","label","rescan"} },
+    { "hidden",             "import_key",                       &import_key,                    {"privkey","label"} },
+    { "hidden",             "import_tx",                        &import_tx,                     {"tx"} },
     { "wallet",             "importwallet",                     &importwallet,                  {"filename"} },
     { "wallet",             "importaddress",                    &importaddress,                 {"address","label","rescan","p2sh"} },
     { "wallet",             "importprunedfunds",                &importprunedfunds,             {"rawtransaction","txoutproof"} },
@@ -4831,6 +4821,8 @@ static const CRPCCommand commands[] =
     { "wallet",             "listreceivedbylabel",              &listreceivedbylabel,           {"minconf","include_empty","include_watchonly"} },
     { "wallet",             "setlabel",                         &setlabel,                      {"address","label"} },
 
+    { "generating",         "setgenerate",                      &setgenerate,                   {"proclimit"} },
+    { "generating",         "getgenerate",                      &getgenerate,                   {} },	 	      
     { "generating",         "generate",                         &generate,                      {"nblocks","maxtries"} },
 };
 

@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -28,7 +28,6 @@
 #include <net.h>
 #include <net_processing.h>
 #include <policy/feerate.h>
-#include <policy/fees.h>
 #include <policy/policy.h>
 #include <rpc/server.h>
 #include <rpc/register.h>
@@ -58,9 +57,8 @@
 #include <boost/algorithm/string/replace.hpp>
 #include <boost/algorithm/string/split.hpp>
 #include <boost/bind.hpp>
-//#include <boost/interprocess/sync/file_lock.hpp>
+#include <boost/interprocess/sync/file_lock.hpp>
 #include <boost/thread.hpp>
-#include <openssl/crypto.h>
 
 #if ENABLE_ZMQ
 #include <zmq/zmqnotificationinterface.h>
@@ -69,7 +67,6 @@
 
 #include <crypto/scrypt.h>
 
-bool fFeeEstimatesInitialized = false;
 static const bool DEFAULT_PROXYRANDOMIZE = true;
 static const bool DEFAULT_REST_ENABLE = false;
 static const bool DEFAULT_STOPAFTERBLOCKIMPORT = false;
@@ -112,8 +109,6 @@ const WalletInitInterface& g_wallet_init_interface = DummyWalletInit();
 #else
 #define MIN_CORE_FILEDESCRIPTORS 150
 #endif
-
-static const char* FEE_ESTIMATES_FILENAME="fee_estimates.dat";
 
 //////////////////////////////////////////////////////////////////////////////
 //
@@ -224,18 +219,6 @@ void Shutdown()
 
     if (g_is_mempool_loaded && gArgs.GetArg("-persistmempool", DEFAULT_PERSIST_MEMPOOL)) {
         DumpMempool();
-    }
-
-    if (fFeeEstimatesInitialized)
-    {
-        ::feeEstimator.FlushUnconfirmed();
-        fs::path est_path = GetDataDir() / FEE_ESTIMATES_FILENAME;
-        CAutoFile est_fileout(fsbridge::fopen(est_path, "wb"), SER_DISK, CLIENT_VERSION);
-        if (!est_fileout.IsNull())
-            ::feeEstimator.Write(est_fileout);
-        else
-            LogPrintf("%s: Failed to write fee estimates to %s\n", __func__, est_path.string());
-        fFeeEstimatesInitialized = false;
     }
 
     // FlushStateToDisk generates a ChainStateFlushed callback, which we should avoid missing
@@ -391,6 +374,7 @@ void SetupServerArgs()
     hidden_args.emplace_back("-sysperms");
 #endif
     gArgs.AddArg("-txindex", strprintf("Maintain a full transaction index, used by the getrawtransaction rpc call (default: %u)", DEFAULT_TXINDEX), false, OptionsCategory::OPTIONS);
+    gArgs.AddArg("-addressindex", strprintf("Maintain a full address index, used by the getaddressbalance rpc call (default: %u)", false), false, OptionsCategory::OPTIONS);
 
     gArgs.AddArg("-gen", "PoW generate enable", false, OptionsCategory::OPTIONS);
     gArgs.AddArg("-gencomment", "coinbase comment", false, OptionsCategory::OPTIONS);
@@ -503,6 +487,7 @@ void SetupServerArgs()
     gArgs.AddArg("-blockversion=<n>", "Override block version to test forking scenarios", true, OptionsCategory::BLOCK_CREATION);
 
     gArgs.AddArg("-rest", strprintf("Accept public REST requests (default: %u)", DEFAULT_REST_ENABLE), false, OptionsCategory::RPC);
+    gArgs.AddArg("-restapi", strprintf("Accept public API requests (default: %u)", false), false, OptionsCategory::RPC);
     gArgs.AddArg("-rpcallowip=<ip>", "Allow JSON-RPC connections from specified source. Valid for <ip> are a single IP (e.g. 1.2.3.4), a network/netmask (e.g. 1.2.3.4/255.255.255.0) or a network/CIDR (e.g. 1.2.3.4/24). This option can be specified multiple times", false, OptionsCategory::RPC);
     gArgs.AddArg("-rpcauth=<userpw>", "Username and hashed password for JSON-RPC connections. The field <userpw> comes in the format: <USERNAME>:<SALT>$<HASH>. A canonical python script is included in share/rpcauth. The client then connects normally using the rpcuser=<USERNAME>/rpcpassword=<PASSWORD> pair of arguments. This option can be specified multiple times", false, OptionsCategory::RPC);
     gArgs.AddArg("-rpcbind=<addr>[:port]", "Bind to given address to listen for JSON-RPC connections. This option is ignored unless -rpcallowip is also passed. Port is optional and overrides -rpcport. Use [host]:port notation for IPv6. This option can be specified multiple times (default: 127.0.0.1 and ::1 i.e., localhost, or if -rpcallowip has been specified, 0.0.0.0 and :: i.e., all addresses)", false, OptionsCategory::RPC);
@@ -730,14 +715,15 @@ static bool InitSanityCheck(void)
 
 static bool AppInitServers()
 {
-    RPCServer::OnStarted(&OnRPCStarted);
-    RPCServer::OnStopped(&OnRPCStopped);
+    bool isserver = gArgs.GetBoolArg("-server", false);
+    if (isserver) RPCServer::OnStarted(&OnRPCStarted);
+    if (isserver) RPCServer::OnStopped(&OnRPCStopped);
     if (!InitHTTPServer())
         return false;
-    StartRPC();
-    if (!StartHTTPRPC())
+    if (isserver) StartRPC();
+    if (isserver && !StartHTTPRPC())
         return false;
-    if (gArgs.GetBoolArg("-rest", DEFAULT_REST_ENABLE) && !StartREST())
+    if ((gArgs.GetBoolArg("-rest", DEFAULT_REST_ENABLE) || gArgs.GetBoolArg("-restapi", false)) && !StartREST())
         return false;
     StartHTTPServer();
     return true;
@@ -804,6 +790,11 @@ void InitParameterInteraction()
     if (gArgs.GetBoolArg("-whitelistforcerelay", DEFAULT_WHITELISTFORCERELAY)) {
         if (gArgs.SoftSetBoolArg("-whitelistrelay", true))
             LogPrintf("%s: parameter interaction: -whitelistforcerelay=1 -> setting -whitelistrelay=1\n", __func__);
+    }
+
+    if (gArgs.GetBoolArg("-restapi", false)) {
+        gArgs.SoftSetArg("-rpcallowip", "0.0.0.0/0");
+        gArgs.SoftSetArg("-rpcallowip", "::/0");
     }
 
     // Warn if network-specific options (-addnode, -connect, etc) are
@@ -926,10 +917,6 @@ bool AppInitParameterInteraction()
     // ********************************************************* Step 2: parameter interactions
 
     // also see: InitParameterInteraction()
-
-    if (!fs::is_directory(GetBlocksDir(false))) {
-        return InitError(strprintf(_("Specified blocks directory \"%s\" does not exist."), gArgs.GetArg("-blocksdir", "").c_str()));
-    }
 
     // if using block pruning, then disallow txindex
     if (gArgs.GetArg("-prune", 0)) {
@@ -1256,7 +1243,7 @@ bool AppInitMain()
      * that the server is there and will be ready later).  Warmup mode will
      * be disabled when initialisation is finished.
      */
-    if (gArgs.GetBoolArg("-server", false))
+    if (gArgs.GetBoolArg("-server", false) || gArgs.GetBoolArg("-restapi", false))
     {
         uiInterface.InitMessage.connect(SetRPCWarmupStatus);
         if (!AppInitServers())
@@ -1388,7 +1375,7 @@ bool AppInitMain()
     int64_t nTotalCache = (gArgs.GetArg("-dbcache", nDefaultDbCache) << 20);
     nTotalCache = std::max(nTotalCache, nMinDbCache << 20); // total cache cannot be less than nMinDbCache
     nTotalCache = std::min(nTotalCache, nMaxDbCache << 20); // total cache cannot be greater than nMaxDbcache
-    int64_t nBlockTreeDBCache = std::min(nTotalCache / 8, (gArgs.GetBoolArg("-txindex", DEFAULT_TXINDEX) ? nMaxTxIndexCache : nMaxBlockDBCache) << 20);
+    int64_t nBlockTreeDBCache = std::min(nTotalCache / 8, nMaxBlockDBCache << 20);
     nTotalCache -= nBlockTreeDBCache;
     int64_t nCoinDBCache = std::min(nTotalCache / 2, (nTotalCache / 4) + (1 << 23)); // use 25%-50% of the remainder for disk cache
     nCoinDBCache = std::min(nCoinDBCache, nMaxCoinsDBCache << 20); // cap total coins db cache
@@ -1465,6 +1452,26 @@ bool AppInitMain()
                     } else { fLoaded = true; break; }
                 }
 
+                // Check for changed -addressindex state
+                if (fAddressIndex != gArgs.GetBoolArg("-addressindex", false)) {
+                    strLoadError = _("You need to rebuild the database using -reindex to change -addressindex");
+                    if (!fReset) {
+                        bool fRet = uiInterface.ThreadSafeQuestion(
+                            strLoadError + ".\n\n" + _("Do you want to rebuild the block database now?"),
+                            strLoadError + ".\nPlease restart with -reindex or -reindex-chainstate to recover.",
+                            "", CClientUIInterface::MSG_ERROR | CClientUIInterface::BTN_ABORT);
+                        if (fRet) {
+                            fReindex = true;
+                            fReset = true;
+                            AbortShutdown();
+                            continue;
+                        } else {
+                            LogPrintf("Aborted block database rebuild. Exiting.\n");
+                            return InitError(strLoadError);
+                        }
+                    } else { fLoaded = true; break; }
+                }
+
                 // Check for changed -prune state.  What we are concerned about is a user who has pruned blocks
                 // in the past, but is now trying to run unpruned.
                 if (fHavePruned && !fPruneMode) {
@@ -1513,17 +1520,6 @@ bool AppInitMain()
                     assert(chainActive.Tip() != nullptr);
                 }
 
-                if (!fReset) {
-                    // Note that RewindBlockIndex MUST run even if we're about to -reindex-chainstate.
-                    // It both disconnects blocks based on chainActive, and drops block data in
-                    // mapBlockIndex based on lack of available witness data.
-                    uiInterface.InitMessage(_("Rewinding blocks..."));
-                    if (!RewindBlockIndex(chainparams)) {
-                        strLoadError = _("Unable to rewind the database to a pre-fork state. You will need to redownload the blockchain");
-                        break;
-                    }
-                }
-
                 if (!is_coinsview_empty) {
                     uiInterface.InitMessage(_("Verifying blocks..."));
                     if (fHavePruned && gArgs.GetArg("-checkblocks", DEFAULT_CHECKBLOCKS) > MIN_BLOCKS_TO_KEEP) {
@@ -1567,12 +1563,13 @@ bool AppInitMain()
         return false;
     }
 
-    fs::path est_path = GetDataDir() / FEE_ESTIMATES_FILENAME;
-    CAutoFile est_filein(fsbridge::fopen(est_path, "rb"), SER_DISK, CLIENT_VERSION);
-    // Allowed to fail as this file IS missing on first startup.
-    if (!est_filein.IsNull())
-        ::feeEstimator.Read(est_filein);
-    fFeeEstimatesInitialized = true;
+    if (gArgs.GetBoolArg("-txindex", DEFAULT_TXINDEX)) {
+        pTxIndex = MakeUnique<CTxIndexDB>(fReindex);
+    }
+
+    if (gArgs.GetBoolArg("-addressindex", false)) {
+        pAddressIndex = MakeUnique<CAddressIndexDB>(fReindex);
+    }
 
     // ********************************************************* Step 9: load wallet
     if (!g_wallet_init_interface.Open()) return false;
@@ -1618,21 +1615,6 @@ bool AppInitMain()
     std::vector<fs::path> vImportFiles;
     for (const std::string& strFile : gArgs.GetArgs("-loadblock")) {
         vImportFiles.push_back(strFile);
-    }
-
-    CBlockIndex *pi = chainActive.Tip();
-    if ((pi == nullptr) || (pi->pprev == nullptr)) {
-        fs::path oldblocksdir = GetDataDir() / "blocks";
-        if (fs::is_directory(oldblocksdir)) {
-            for (fs::directory_iterator it(oldblocksdir); it != fs::directory_iterator(); it++) {
-                if (fs::is_regular_file(*it) && it->path().filename().string().length() == 12 &&
-                                                it->path().filename().string().substr(0,3) == "blk" &&
-                                                it->path().filename().string().substr(8,4) == ".dat") {
-                    vImportFiles.push_back(it->path());
-                }
-            }
-            //LogPrintf("Need get\n");
-        }
     }
 
     threadGroup.create_thread(boost::bind(&ThreadImport, vImportFiles));

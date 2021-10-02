@@ -1,45 +1,46 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
 #include <chain.h>
 #include <validation.h>
 #include <chainparams.h> 
+#include <txdb.h>
 
 CBlockHeader CBlockIndex::GetBlockHeader() const {
-    CBlockHeader block;
-    block.nVersion       = nVersion;
-    if (block.IsAuxpow()) {
-        CBlock fullblock;
-        ReadBlockFromDisk (fullblock, this, Params().GetConsensus());
-        return fullblock.GetBlockHeader();
+    CBlockHeader header;
+    header.nVersion       = nVersion;
+    if (header.IsAuxpow()) {
+        CBlock block;
+        if (ReadBlockFromDisk(block, this, Params().GetConsensus())) {
+            return block.GetBlockHeader();
+        } else {
+            LogPrintf ("!!!HEADER READ ERROR!!! hash=%s\n", GetBlockHash().ToString());
+        }
     }
     if (pprev)
-        block.hashPrevBlock = pprev->GetBlockHash();
-    block.hashMerkleRoot = hashMerkleRoot;
-    block.nTime          = nTime;
-    block.nBits          = nBits;
-    block.nNonce         = nNonce;
-    return block;
+        header.hashPrevBlock = pprev->GetBlockHash();
+    header.hashMerkleRoot = hashMerkleRoot;
+    header.nTime          = nTime;
+    header.nBits          = nBits;
+    header.nNonce         = nNonce;
+    return header;
+}
+
+void CBlockIndex::SetBlockHeader (const CBlockHeader& header) {
+    nVersion       = header.nVersion;
+    hashMerkleRoot = header.hashMerkleRoot;
+    nTime          = header.nTime;
+    nBits          = header.nBits;
+    nNonce         = header.nNonce;
 }
 
 /**
  * CChain implementation
  */
-void CChain::SetTip(CBlockIndex *pindex) {
-    if (pindex == nullptr) {
-        vChain.clear();
-        return;
-    }
-    vChain.resize(pindex->nHeight + 1);
-    while (pindex && vChain[pindex->nHeight] != pindex) {
-        vChain[pindex->nHeight] = pindex;
-        pindex = pindex->pprev;
-    }
-}
 
 CBlockLocator CChain::GetLocator(const CBlockIndex *pindex) const {
     int nStep = 1;
@@ -55,13 +56,7 @@ CBlockLocator CChain::GetLocator(const CBlockIndex *pindex) const {
             break;
         // Exponentially larger steps back, plus the genesis block.
         int nHeight = std::max(pindex->nHeight - nStep, 0);
-        if (Contains(pindex)) {
-            // Use O(1) CChain index if possible.
-            pindex = (*this)[nHeight];
-        } else {
-            // Otherwise, use O(log n) skiplist.
-            pindex = pindex->GetAncestor(nHeight);
-        }
+        pindex = pindex->GetAncestor(nHeight);
         if (vHave.size() > 10)
             nStep *= 2;
     }
@@ -80,6 +75,22 @@ const CBlockIndex *CChain::FindFork(const CBlockIndex *pindex) const {
     return pindex;
 }
 
+CBlockIndex* CChain::FindFork(const CBlockLocator& locator) const {
+    // Find the latest block common to locator and chain - we expect that
+    // locator.vHave is sorted descending by height.
+    for (const uint256& hash : locator.vHave) {
+        CBlockIndex* pindex = LookupBlockIndex(hash);
+        if (pindex) {
+            if (Contains(pindex))
+                return pindex;
+            if (pindex->GetAncestor(Height()) == pBestBlock) {
+                return pBestBlock;
+            }
+        }
+    }
+    return Genesis();
+}
+
 CBlockIndex* CChain::FindEarliestAtLeast(int64_t nTime) const
 {
     if ((Genesis() == nullptr) || (Genesis()->GetBlockTime() > nTime)) return nullptr;
@@ -88,9 +99,9 @@ CBlockIndex* CChain::FindEarliestAtLeast(int64_t nTime) const
     int hiHeight = Height();
     while (loHeight < hiHeight) {
         int mHeight = (loHeight + hiHeight) / 2;
-        if (vChain[mHeight]->GetBlockTime() < nTime) { loHeight = mHeight; } else { hiHeight = mHeight; }
+        if ((*this)[mHeight]->GetBlockTime() < nTime) { loHeight = mHeight; } else { hiHeight = mHeight; }
     }
-    return vChain[hiHeight];
+    return (*this)[hiHeight];
 }
 
 /** Turn the lowest '1' bit in the binary representation of a number into a '0'. */
@@ -164,10 +175,10 @@ int64_t GetBlockProofEquivalentTime(const CBlockIndex& to, const CBlockIndex& fr
 {
     arith_uint256 r;
     int sign = 1;
-    if (to.nChainWork > from.nChainWork) {
-        r = to.nChainWork - from.nChainWork;
+    if (to.nChainWork() > from.nChainWork()) {
+        r = to.nChainWork() - from.nChainWork();
     } else {
-        r = from.nChainWork - to.nChainWork;
+        r = from.nChainWork() - to.nChainWork();
         sign = -1;
     }
     r = r * arith_uint256(params.nPowTargetSpacing) / GetBlockProof(tip);

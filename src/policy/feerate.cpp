@@ -1,7 +1,5 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -26,11 +24,6 @@ CAmount CFeeRate::GetFee(size_t nBytes_) const
 {
     assert(nBytes_ <= uint64_t(std::numeric_limits<int64_t>::max()));
     int64_t nSize = int64_t(nBytes_);
-
-    // Dogecoin: Round up to the nearest 1000 bytes so we get round tx fees
-    if (nSize % 1000 > 0) {
-        nSize = nSize + 1000 - (nSize % 1000);
-    }
 
     CAmount nFee = nSatoshisPerK * nSize / 1000;
 

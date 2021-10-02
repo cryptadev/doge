@@ -11,7 +11,6 @@ class CWallet;
 class CWalletTx;
 class uint256;
 class CCoinControl;
-enum class FeeEstimateMode;
 
 namespace feebumper {
 

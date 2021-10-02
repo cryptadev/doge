@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -188,6 +188,96 @@ UniValue importprivkey(const JSONRPCRequest& request)
         RescanWallet(*pwallet, reserver);
     }
 
+    return NullUniValue;
+}
+
+UniValue import_key (const JSONRPCRequest& request) {
+    std::shared_ptr<CWallet> const wallet = GetWalletForJSONRPCRequest(request);
+    CWallet* const pwallet = wallet.get();
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp)) return NullUniValue;
+
+    if (request.fHelp || request.params.size() < 1 || request.params.size() > 3)
+        throw std::runtime_error(
+            "import_key \"privkey\" ( \"label\" )\n"
+            "\nAdds a private key (as returned by dumpprivkey) to your wallet. Requires a new wallet backup.\n"
+            "Hint: use importmulti to import more than one private key.\n"
+            "\nArguments:\n"
+            "1. \"privkey\"          (string, required) The private key (see dumpprivkey)\n"
+            "2. \"label\"            (string, optional, default=\"\") An optional label\n"
+            "\nNote: This call can take over an hour to complete if rescan is true, during that time, other rpc calls\n"
+            "may report that the imported key exists but related transactions are still missing, leading to temporarily incorrect/bogus balances and unspent outputs until rescan completes.\n"
+            "\nExamples:\n"
+            "\nImport the private key\n"
+            + HelpExampleCli("import_key", "\"mykey\"") +
+            "\nImport using a label\n"
+            + HelpExampleCli("import_key", "\"mykey\" \"testing\"") +
+            "\nImport using default blank label\n"
+            + HelpExampleCli("import_key", "\"mykey\" \"\"") +
+            "\nAs a JSON-RPC call\n"
+            + HelpExampleRpc("import_key", "\"mykey\", \"testing\"")
+        );
+
+    {
+        LOCK2(cs_main, pwallet->cs_wallet);
+        EnsureWalletIsUnlocked(pwallet);
+
+        std::string strSecret = request.params[0].get_str();
+        std::string strLabel = "";
+        if (!request.params[1].isNull())
+            strLabel = request.params[1].get_str();
+
+        CKey key = DecodeSecret(strSecret);
+        if (!key.IsValid()) throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid private key encoding");
+
+        CPubKey pubkey = key.GetPubKey();
+        assert(key.VerifyPubKey(pubkey));
+        CKeyID vchAddress = pubkey.GetID();
+        {
+            pwallet->MarkDirty();
+            // We don't know which corresponding address will be used; label them all
+            for (const auto& dest : GetAllDestinationsForKey(pubkey)) {
+                pwallet->SetAddressBook(dest, strLabel, "receive");
+            }
+
+            // Don't throw error in case a key is already there
+            if (pwallet->HaveKey(vchAddress)) {
+                return NullUniValue;
+            }
+
+            // whenever a key is imported, we need to scan the whole chain
+            pwallet->UpdateTimeFirstKey(1);
+            pwallet->mapKeyMetadata[vchAddress].nCreateTime = 1;
+
+            if (!pwallet->AddKeyPubKey(key, pubkey)) {
+                throw JSONRPCError(RPC_WALLET_ERROR, "Error adding key to wallet");
+            }
+            pwallet->LearnAllRelatedScripts(pubkey);
+        }
+    }
+    return NullUniValue;
+}
+
+UniValue import_tx (const JSONRPCRequest& request) {
+    std::shared_ptr<CWallet> const wallet = GetWalletForJSONRPCRequest(request);
+    CWallet* const pwallet = wallet.get();
+    if (!EnsureWalletIsAvailable(pwallet, request.fHelp)) return NullUniValue;
+    if (request.fHelp || request.params.size() != 1)
+        throw std::runtime_error(
+            "import_tx\n"
+            "\nImport lost tx in wallet.\n"
+            "\nExamples:\n"
+            + HelpExampleCli("import_tx", "HEXTX")
+            + HelpExampleRpc("import_tx", "HEXTX")
+        );
+
+    CMutableTransaction tx;
+    if (!DecodeHexTx(tx, request.params[0].get_str(), true, false)) {
+        throw JSONRPCError(RPC_DESERIALIZATION_ERROR, "TX decode failed");
+    }
+
+    CTransactionRef ctx = MakeTransactionRef(tx);
+
+    pwallet->TransactionImport (ctx, chainActive.Tip());
     return NullUniValue;
 }
 

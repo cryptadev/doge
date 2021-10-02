@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -10,6 +10,10 @@
 #include <primitives/block.h>
 #include <primitives/transaction.h>
 #include <validation.h>
+#include <txdb.h>
+#include <net.h>
+#include <net_processing.h>
+#include <key_io.h>
 #include <httpserver.h>
 #include <rpc/blockchain.h>
 #include <rpc/server.h>
@@ -18,6 +22,8 @@
 #include <txmempool.h>
 #include <utilstrencodings.h>
 #include <version.h>
+#include <policy/policy.h>
+#include <consensus/validation.h>
 
 #include <boost/algorithm/string.hpp>
 
@@ -74,7 +80,7 @@ static RetFormat ParseDataFormat(std::string& param, const std::string& strReq)
     if (pos == std::string::npos)
     {
         param = strReq;
-        return rf_names[0].rf;
+        return rf_names[3].rf;
     }
 
     param = strReq.substr(0, pos);
@@ -587,10 +593,431 @@ static const struct {
       {"/rest/getutxos", rest_getutxos},
 };
 
+// restapi
+
+static bool API_ERROR (HTTPRequest* req, std::string message) {
+    UniValue root (UniValue::VOBJ);
+    root.pushKV("status", "error");
+    root.pushKV("errmsg", message);
+    std::string strJSON = root.write() + "\n";
+    req->WriteHeader("Content-Type", "application/json");
+    req->WriteReply(HTTP_OK, strJSON);
+    return true;
+}
+
+static bool API_OK (HTTPRequest* req, UniValue& json) {
+    json.pushKV("status", "ok");
+    std::string strJSON = json.write() + "\n";
+    req->WriteHeader("Content-Type", "application/json");
+    req->WriteReply(HTTP_OK, strJSON);
+    return true;
+}
+
+UniValue GetNetworkHash () {
+    CBlockIndex *pb = chainActive.Tip();
+    int lookup = 120;
+    if (pb == nullptr) return 0;
+    if (lookup > pb->nHeight) lookup = pb->nHeight;
+    CBlockIndex *pb0 = pb;
+    int64_t minTime = pb0->GetBlockTime();
+    int64_t maxTime = minTime;
+    for (int i = 0; i < lookup; i++) {
+        pb0 = pb0->pprev;
+        int64_t time = pb0->GetBlockTime();
+        minTime = std::min(time, minTime);
+        maxTime = std::max(time, maxTime);
+    }
+    if (minTime == maxTime) return 0;
+    arith_uint256 workDiff = pb->nChainWork() - pb0->nChainWork();
+    int64_t timeDiff = maxTime - minTime;
+    return workDiff.getdouble() / timeDiff;
+}
+
+bool api_chain (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+
+    UniValue root (UniValue::VOBJ);
+    root.pushKV("bestblockhash",        chainActive.Tip()->GetBlockHash().GetHex()); 
+    root.pushKV("blocks",               (int)chainActive.Height());
+    root.pushKV("headers",              pindexBestHeader ? pindexBestHeader->nHeight : -1);
+    root.pushKV("difficulty",           GetDifficulty(chainActive.Tip()));
+    root.pushKV("initialblockdownload", IsInitialBlockDownload());
+    root.pushKV("progress",             GuessVerificationProgress(Params().TxData(), chainActive.Tip()));
+    root.pushKV("chainwork",            chainActive.Tip()->nChainWork().GetHex()); 
+    root.pushKV("size_on_disk",         CalculateCurrentUsage()); 
+    root.pushKV("networkhash",          GetNetworkHash());
+    root.pushKV("mempool_size",         (uint64_t)mempool.size());
+    return API_OK (req, root);
+}
+
+bool api_net (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+
+    UniValue root (UniValue::VOBJ);
+    root.pushKV("connection",   (int)g_connman->GetNodeCount(CConnman::CONNECTIONS_ALL));
+    UniValue nodes (UniValue::VARR);
+    {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("id", "self");
+        obj.pushKV("version", PROTOCOL_VERSION);
+        obj.pushKV("subversion", strSubVersion);
+        obj.pushKV("synced_headers", pindexBestHeader ? pindexBestHeader->nHeight : -1);
+        obj.pushKV("synced_blocks", (int)chainActive.Height()); 
+        nodes.push_back(obj);
+    }
+    std::vector<CNodeStats> vstats;
+    g_connman->GetNodeStats(vstats);
+    for (const CNodeStats& stats : vstats) {
+        CNodeStateStats statestats;
+        bool fStateStats = GetNodeStateStats(stats.nodeid, statestats);
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("id", stats.nodeid);
+        obj.pushKV("addr", stats.addrName);
+        obj.pushKV("version", stats.nVersion);
+        obj.pushKV("subversion", stats.cleanSubVer);
+        obj.pushKV("bytessent", stats.nSendBytes);
+        obj.pushKV("bytesrecv", stats.nRecvBytes);         
+        obj.pushKV("lastsend", stats.nLastSend);
+        obj.pushKV("lastrecv", stats.nLastRecv);
+        obj.pushKV("inbound", stats.fInbound); 
+        obj.pushKV("synced_headers", statestats.nSyncHeight);
+        obj.pushKV("synced_blocks", statestats.nCommonHeight); 
+        obj.pushKV("banscore", statestats.nMisbehavior);
+        nodes.push_back(obj);
+    }
+    root.pushKV("nodes", nodes);
+
+    UniValue ipport (UniValue::VARR);
+    std::vector<CAddress> vAddr = g_connman->GetAddresses();
+    for (const CAddress &addr : vAddr) {
+        UniValue obj(UniValue::VOBJ);
+        obj.pushKV("addr", addr.ToStringIPPort());
+        obj.pushKV("time", (int)addr.nTime);
+        ipport.push_back(obj);
+    }
+    root.pushKV("addresses", ipport);
+    return API_OK (req, root);
+}
+
+void getTxData (UniValue& obj, const CTransactionRef tx, uint256 hashBlock) {
+    obj.pushKV("hash", tx->GetHash().GetHex());
+    obj.pushKV("size", (int)::GetSerializeSize(tx, SER_NETWORK, PROTOCOL_VERSION));
+    obj.pushKV("version", tx->nVersion);
+    obj.pushKV("locktime", (int64_t)tx->nLockTime);
+    if (!hashBlock.IsNull()) obj.pushKV("blockhash", hashBlock.GetHex());
+    UniValue vin(UniValue::VARR);
+    for (unsigned int i = 0; i < tx->vin.size(); i++) {
+        const CTxIn& txin = tx->vin[i];
+        UniValue in(UniValue::VOBJ);
+        if (tx->IsCoinBase())
+            in.pushKV("coinbase", HexStr(txin.scriptSig.begin(), txin.scriptSig.end()));
+        else {
+            in.pushKV("tx_id", txin.prevout.hash.GetHex());
+            in.pushKV("tx_out", (int64_t)txin.prevout.n);
+            CTransactionRef intx;
+            uint256 inhashBlock = uint256();
+            if (GetTransaction(txin.prevout.hash, intx, Params().GetConsensus(), inhashBlock, true)) {
+                if (intx->vout.size() >= txin.prevout.n + 1) {
+                    CTxDestination addr;
+                    if (ExtractDestination(intx->vout[txin.prevout.n].scriptPubKey, addr))
+                        in.pushKV("address", EncodeDestination(addr));
+                    in.pushKV("value", ValueFromAmount(intx->vout[txin.prevout.n].nValue));
+                }  
+            }
+        }
+        vin.push_back(in);
+    }
+    obj.pushKV("input", vin);
+    UniValue vout(UniValue::VARR);
+    for (unsigned int i = 0; i < tx->vout.size(); i++) {
+        const CTxOut& txout = tx->vout[i];
+        UniValue out(UniValue::VOBJ);
+        CTxDestination addr;
+        if (ExtractDestination(txout.scriptPubKey, addr))
+            out.pushKV("address", EncodeDestination(addr));
+        out.pushKV("value", ValueFromAmount(txout.nValue));
+        vout.push_back(out);
+    }
+    obj.pushKV("output", vout);
+}
+
+bool api_mempool (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+
+    UniValue root (UniValue::VOBJ);
+    root.pushKV("size",             (int64_t) mempool.size()); 
+    root.pushKV("bytes",            (int64_t) mempool.GetTotalTxSize());
+    root.pushKV("usage",            (int64_t) mempool.DynamicMemoryUsage());
+    size_t maxmempool = gArgs.GetArg("-maxmempool", DEFAULT_MAX_MEMPOOL_SIZE) * 1000000;
+    root.pushKV("mempoolminfee",    ValueFromAmount(std::max(mempool.GetMinFee(maxmempool), ::minRelayTxFee).GetFeePerK()));
+    root.pushKV("minrelaytxfee",    ValueFromAmount(::minRelayTxFee.GetFeePerK())); 
+    {
+        LOCK(mempool.cs);
+        UniValue sub (UniValue::VOBJ);
+        for (const CTxMemPoolEntry& e : mempool.mapTx) {
+            UniValue obj(UniValue::VOBJ);
+            getTxData (obj, e.GetSharedTx(), uint256());
+            sub.push_back(obj);
+        }
+        root.pushKV("tx", sub);
+    }
+    return API_OK (req, root);
+}
+
+std::string getHeaderData (UniValue& obj, const CBlockIndex* pi, bool full_tx) {
+    CBlock block;
+    if (!pi) return " not found";
+    if (IsBlockPruned(pi)) return " not available (pruned data)";
+    if (!ReadBlockFromDisk(block, pi, Params().GetConsensus())) return " not found";
+    obj.pushKV("hash", pi->GetBlockHash().GetHex());
+    int confirmations = -1;
+    if (chainActive.Contains(pi)) confirmations = chainActive.Height() - pi->nHeight + 1;
+    obj.pushKV("confirmations", confirmations);
+    obj.pushKV("height", pi->nHeight);
+    obj.pushKV("versionHex", strprintf("0x%08x", block.nVersion));
+    obj.pushKV("merkleroot", block.hashMerkleRoot.GetHex());
+    obj.pushKV("time", block.GetBlockTime());
+    obj.pushKV("nonce", (uint64_t)block.nNonce);
+    obj.pushKV("bits", strprintf("%08x", block.nBits));
+    obj.push_back(Pair("difficulty", GetDifficulty(pi)));
+    if (pi->pprev) obj.pushKV("prevblockhash", pi->pprev->GetBlockHash().GetHex());
+    CBlockIndex *pnext = chainActive.Next(pi);
+    if (pnext) obj.pushKV("nextblockhash", pnext->GetBlockHash().GetHex());
+    obj.push_back(Pair("size", (int)::GetSerializeSize(block, SER_NETWORK, PROTOCOL_VERSION)));
+    obj.pushKV("chainwork", pi->nChainWork().GetHex());
+    obj.pushKV("nTx", (uint64_t)pi->nTx);
+    UniValue utx (UniValue::VARR);
+    for(const auto& tx : block.vtx) {
+        if (full_tx) {
+            UniValue obj(UniValue::VOBJ);
+            getTxData (obj, tx, uint256());
+            utx.push_back(obj);
+        } else {
+            utx.push_back(tx->GetHash().GetHex());
+        }
+    }
+    obj.pushKV("tx", utx);
+    return "";
+}
+
+bool api_header (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+    const CBlockIndex* pi = NULL;
+    int count = 20;
+    const std::string::size_type pos = strURIPart.rfind('_');
+    std::string s1;
+    uint32_t nn;
+    if (pos == std::string::npos) { s1 = strURIPart; } else {
+        s1 = strURIPart.substr(0, pos);
+        if (s1 == "") return API_ERROR (req, "header hash is null");
+        std::string s2 = strURIPart.substr(pos + 1);
+        if (ParseUInt32(s2, &nn) && (nn < 599)) { count = nn; } else
+            return API_ERROR (req, "header count is invalid (" + strURIPart + ")");        
+    }
+    if (ParseUInt32(s1, &nn)) {
+        pi = chainActive[nn];
+        if (!pi) return API_ERROR (req, "header index " + strURIPart + " not found");
+    } else if (IsHex(s1)) {
+        uint256 hash;
+        hash.SetHex(s1);
+        pi = LookupBlockIndex(hash);
+        if (!pi) return API_ERROR (req, "header hash " + strURIPart + " not found");
+    } else if (s1 == "") {
+        pi = chainActive[chainActive.Height() <= count ? 0 : chainActive.Height() - count];
+        if (!pi) return API_ERROR (req, "header hash " + strURIPart + " not found");
+    } else return API_ERROR (req, "params " + strURIPart + " is invalid");
+    UniValue root (UniValue::VOBJ);
+    while (pi != nullptr && chainActive.Contains(pi)) {
+        UniValue obj (UniValue::VOBJ);
+        std::string ret = getHeaderData (obj, pi, false);
+        if (ret != "") return API_ERROR (req, strprintf("[%d]: %s", pi->nHeight, ret));
+        root.pushKV(strprintf("%d", pi->nHeight), obj);
+        if (count-- <= 0) break;
+        pi = chainActive.Next(pi);
+    }
+    return API_OK (req, root);
+}
+
+bool api_block (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+    const CBlockIndex* pi = NULL;
+    uint32_t nn;
+    if (ParseUInt32(strURIPart, &nn)) {
+        pi = chainActive[nn];
+        if (!pi) return API_ERROR (req, "block index " + strURIPart + " not found");
+    } else if (IsHex(strURIPart)) {
+        uint256 hash;
+        hash.SetHex(strURIPart);
+        pi = LookupBlockIndex(hash);
+        if (!pi) return API_ERROR (req, "block hash " + strURIPart + " not found");
+    } else if (strURIPart == "") {
+        pi = chainActive.Tip();
+        if (!pi) return API_ERROR (req, "block index " + strURIPart + " not found");
+    } else return API_ERROR (req, "params " + strURIPart + " is invalid");
+    UniValue root (UniValue::VOBJ);
+    UniValue obj (UniValue::VOBJ);
+    std::string ret = getHeaderData (obj, pi, true);
+    if (ret != "") return API_ERROR (req, strprintf("[%d]: %s", pi->nHeight, ret));
+    root.pushKV(strprintf("%d", pi->nHeight), obj);
+    return API_OK (req, root);
+}
+
+bool api_tx (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+    uint256 hash;
+    if (!ParseHashStr(strURIPart, hash))
+        return API_ERROR (req, "tx hash " + strURIPart + " is invalid");
+    CTransactionRef tx;
+    uint256 hashBlock = uint256();
+    if (!GetTransaction(hash, tx, Params().GetConsensus(), hashBlock, true))
+        return API_ERROR (req, "tx hash " + strURIPart + " not found");
+    UniValue root (UniValue::VOBJ);
+    getTxData (root, tx, hashBlock);
+    return API_OK (req, root);
+}
+
+bool heightSort(std::pair<CAddressKey, CAddressValue> a, std::pair<CAddressKey, CAddressValue> b) {
+    return a.second.height > b.second.height;
+}
+
+bool api_address (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+    int index = 0;
+    const std::string::size_type pos = strURIPart.rfind('_');
+    std::string sss;
+    if (pos == std::string::npos) { sss = strURIPart; } else {
+        sss = strURIPart.substr(0, pos);
+        if (sss == "") return API_ERROR (req, "address is null");
+        uint32_t nn = 0;
+        std::string s2 = strURIPart.substr(pos + 1);
+        if (ParseUInt32(s2, &nn) && (nn < 9999)) { index = nn; } else
+            return API_ERROR (req, "address count " + strURIPart + " is invalid");
+    }
+    if (!IsValidDestination(DecodeDestination(sss))) 
+        return API_ERROR (req, "address " + strURIPart + " is invalid");
+    std::vector<std::pair<CAddressKey, CAddressValue>> info;
+    if (!pAddressIndex || !pAddressIndex->ReadAddress(GetScriptForDestination(DecodeDestination(sss)), info))
+        return API_ERROR (req, "address " + strURIPart + " not found");
+    UniValue coins(UniValue::VARR);
+    CAmount value = 0, receive_amount = 0, send_amount = 0; 
+    int total_in = 0, total_out = 0, total_pos = 0; index *= 200;
+    std::sort(info.begin(), info.end(), heightSort); 
+    for (auto it : info) {
+        UniValue output(UniValue::VOBJ);
+        total_in++;
+        receive_amount += it.second.value;
+        output.pushKV("value", ValueFromAmount(it.second.value));
+        output.pushKV("tx_hash", it.first.out.hash.GetHex());
+        output.pushKV("tx_out", (int64_t)it.first.out.n);
+        output.pushKV("tx_height", (int64_t)it.second.height);
+        const CBlockIndex* pi = chainActive[it.second.height];
+        if (pi) output.pushKV("tx_time", pi->GetBlockTime());
+        if (it.second.spend_height == 0) {
+            output.pushKV("isspent", false);
+            value += it.second.value;
+        } else {
+            total_out++;
+            send_amount += it.second.value;
+            output.pushKV("isspent", true);
+            output.pushKV("spent_tx_hash", it.second.spend_hash.GetHex());
+            output.pushKV("spent_tx_out", (int64_t)it.second.spend_n);
+            output.pushKV("spent_tx_height", (int64_t)it.second.spend_height);
+            const CBlockIndex* pi = chainActive[it.second.spend_height];
+            if (pi) output.pushKV("spent_tx_time", pi->GetBlockTime());
+        }
+        total_pos++;
+        if ((index <= total_pos) && (total_pos < index + 200)) coins.push_back(output);
+    }
+    UniValue objTx(UniValue::VOBJ);
+    objTx.pushKV("address", sss);
+    objTx.pushKV("value", ValueFromAmount(value));
+    objTx.pushKV("receive_count", total_in);
+    objTx.pushKV("send_count", total_out);
+    objTx.pushKV("receive_amount", ValueFromAmount(receive_amount));
+    objTx.pushKV("send_amount", ValueFromAmount(send_amount));
+    objTx.pushKV("start_offset", index);
+    objTx.pushKV("coins", coins);
+    return API_OK (req, objTx);
+}
+
+bool api_send (HTTPRequest* req, const std::string& strURIPart) {
+    if (!CheckWarmup(req)) return false;
+    if (req->GetRequestMethod() != HTTPRequest::POST)
+        return API_ERROR (req, "only POST requests");
+    UniValue uniRequest;
+    if (!uniRequest.read(req->ReadBody()))
+        return API_ERROR (req, "POST json incorrect");
+    UniValue txdata = find_value(uniRequest, "txdata");
+    if (txdata.isNull())
+        return API_ERROR (req, "json txdata not found");
+
+    CMutableTransaction mtx;
+    if (!DecodeHexTx(mtx, txdata.get_str()))
+        return API_ERROR (req, "json txdata incorrect");
+    CTransactionRef tx(MakeTransactionRef(std::move(mtx)));
+    UniValue root (UniValue::VOBJ);
+    const uint256& hashTx = tx->GetHash();
+    bool fHaveChain = false;
+    {
+        LOCK(cs_main);
+        CCoinsViewCache &view = *pcoinsTip;
+        for (size_t o = 0; !fHaveChain && o < tx->vout.size(); o++) {
+            const Coin& existingCoin = view.AccessCoin(COutPoint(hashTx, o));
+            fHaveChain = !existingCoin.IsSpent();
+            if (fHaveChain) break;
+        }
+    }
+    if (fHaveChain) {
+        root.pushKV("status", "transaction already in blockchain");
+    } else if (mempool.exists(hashTx)) {
+        root.pushKV("status", "transaction already in mempool");
+    } else {
+        CValidationState state;
+        bool fMissingInputs;
+        if (!AcceptToMemoryPool(mempool, state, std::move(tx), &fMissingInputs,
+                    nullptr /* plTxnReplaced */, false /* bypass_limits */, maxTxFee)) {
+            if (state.IsInvalid()) {
+                return API_ERROR (req, FormatStateMessage(state));
+            } else {
+                if (fMissingInputs)
+                    return API_ERROR (req, "tx " + hashTx.ToString() + " missing inputs");
+                return API_ERROR (req, FormatStateMessage(state));
+            }
+        } else {
+            if (g_connman) {
+                CInv inv(MSG_TX, hashTx);
+                g_connman->ForEachNode([&inv](CNode* pnode) { pnode->PushInventory(inv); });
+            }
+            root.pushKV("status", "transaction added to mempool");
+        }
+    }
+    return API_OK (req, root);
+}
+
+static const struct {
+    const char* prefix;
+    bool (*handler)(HTTPRequest* req, const std::string& strReq);
+} api_uri_prefixes[] = {
+      {"/api/chain", api_chain}, 
+      {"/api/net", api_net},
+      {"/api/mempool", api_mempool},
+      {"/api/header/", api_header},     // start_hash, start_hash/num_header, start_index, start_index/num_header
+      {"/api/block/", api_block},       // hash, index
+      {"/api/tx/", api_tx},             // hash
+      {"/api/address/", api_address},   // address
+      {"/api/send/", api_send},         // TX HEX
+};
+
 bool StartREST()
 {
-    for (unsigned int i = 0; i < ARRAYLEN(uri_prefixes); i++)
-        RegisterHTTPHandler(uri_prefixes[i].prefix, false, uri_prefixes[i].handler);
+    if (gArgs.GetBoolArg("-server", false)) {
+        for (unsigned int i = 0; i < ARRAYLEN(uri_prefixes); i++)
+            RegisterHTTPHandler(uri_prefixes[i].prefix, false, uri_prefixes[i].handler);
+    }
+    if (gArgs.GetBoolArg("-restapi", false)) {
+        for (unsigned int i = 0; i < ARRAYLEN(api_uri_prefixes); i++)
+            RegisterHTTPHandler(api_uri_prefixes[i].prefix, false, api_uri_prefixes[i].handler);
+    }
     return true;
 }
 
@@ -600,6 +1027,12 @@ void InterruptREST()
 
 void StopREST()
 {
-    for (unsigned int i = 0; i < ARRAYLEN(uri_prefixes); i++)
-        UnregisterHTTPHandler(uri_prefixes[i].prefix, false);
+    if (gArgs.GetBoolArg("-server", false)) {
+        for (unsigned int i = 0; i < ARRAYLEN(uri_prefixes); i++)
+            UnregisterHTTPHandler(uri_prefixes[i].prefix, false);
+    }
+    if (gArgs.GetBoolArg("-restapi", false)) {
+        for (unsigned int i = 0; i < ARRAYLEN(api_uri_prefixes); i++)
+            UnregisterHTTPHandler(api_uri_prefixes[i].prefix, false);
+    }
 }

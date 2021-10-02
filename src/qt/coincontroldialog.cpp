@@ -16,7 +16,6 @@
 #include <wallet/coincontrol.h>
 #include <interfaces/node.h>
 #include <key_io.h>
-#include <policy/fees.h>
 #include <policy/policy.h>
 #include <validation.h> // For mempool
 #include <wallet/fees.h>
@@ -499,7 +498,7 @@ void CoinControlDialog::updateLabels(WalletModel *model, QDialog* dialog)
                 nBytes -= 34;
 
         // Fee
-        nPayFee = model->wallet().getMinimumFee(nBytes, *coinControl(), nullptr /* returned_target */, nullptr /* reason */);
+        nPayFee = model->wallet().getMinimumFee(nBytes, *coinControl());
 
         if (nPayAmount > 0)
         {

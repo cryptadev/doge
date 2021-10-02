@@ -1,5 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -220,6 +221,78 @@ bool WalletInit::Verify() const
     return true;
 }
 
+std::string datetime_str (int64_t nTime) {
+    struct tm ts;
+    time_t time_val = nTime;
+#ifdef _MSC_VER
+    gmtime_s(&ts, &time_val);
+#else
+    gmtime_r(&time_val, &ts);
+#endif
+    return strprintf("%04i-%02i-%02i-%02i-%02i-%02i", ts.tm_year + 1900, ts.tm_mon + 1, ts.tm_mday, ts.tm_hour, ts.tm_min, ts.tm_sec);
+}
+
+bool AutoBackupWallet (std::string walletFile) {
+  try {
+    if (Params().NetworkIDString() != CBaseChainParams::MAIN) return true;
+
+    if (walletFile == "") walletFile = "wallet.dat";
+    fs::path sourceFile = walletFile;
+    if (!fs::exists(sourceFile)) sourceFile = GetWalletDir() / walletFile;
+    if (!fs::exists(sourceFile)) sourceFile = GetDataDir() / walletFile;
+    if (!fs::exists(sourceFile)) return false;
+
+    fs::path dir = GetWalletDir() / "backups";
+    if (!fs::exists(dir)) {
+        if(!fs::create_directories(dir)) {
+            LogPrintf("Wasn't able to create wallet backup folder %s!", dir.string());
+            return false;
+        }
+    } else if (!fs::is_directory(dir)) {
+        LogPrintf("%s is not a valid backup folder!", dir.string());
+        return false;
+    }
+
+    std::string walletFileName = sourceFile.filename().string();
+    std::string dt = "."; dt += datetime_str(GetTime());
+    fs::path backupFile = dir / (walletFileName + dt);
+    sourceFile.make_preferred();
+    backupFile.make_preferred();
+    if (fs::exists(backupFile)) {
+        LogPrintf("Failed to create backup, file already exists!");
+        return false;
+    }
+    if(fs::exists(sourceFile)) {
+        try {
+            fs::copy_file(sourceFile, backupFile);
+            LogPrintf("Creating backup of %s -> %s\n", sourceFile.string(), backupFile.string());
+        } catch(fs::filesystem_error &error) {
+            LogPrintf("Failed to create backup, error: %s\n", error.what());
+            return false;
+        }
+    }
+    
+    std::vector<std::pair<int64_t, fs::path>> vFiles;
+    dir.make_preferred();
+    for(auto& p: fs::directory_iterator(dir))
+        if (p.path().stem().string() == walletFileName) {
+            vFiles.push_back (std::make_pair (fs::last_write_time(p.path()), p.path()));
+        }
+    sort (vFiles.begin(), vFiles.end());
+    reverse (vFiles.begin(), vFiles.end());
+
+    for (int ind = 11; ind < vFiles.size(); ind++) {
+        try {
+            fs::remove(vFiles.at(ind).second);
+            LogPrintf("Old backup deleted: %s\n", vFiles.at(ind).second);
+        } catch(fs::filesystem_error &error) {
+            LogPrintf("Failed to delete backup, error: %s\n", error.what());
+        }
+    }
+  } catch (...) { return false; }
+    return true;
+}
+
 bool WalletInit::Open() const
 {
     if (gArgs.GetBoolArg("-disablewallet", DEFAULT_DISABLE_WALLET)) {
@@ -228,6 +301,7 @@ bool WalletInit::Open() const
     }
 
     for (const std::string& walletFile : gArgs.GetArgs("-wallet")) {
+        AutoBackupWallet (walletFile);
         std::shared_ptr<CWallet> pwallet = CWallet::CreateWalletFromFile(WalletLocation(walletFile));
         if (!pwallet) {
             return false;

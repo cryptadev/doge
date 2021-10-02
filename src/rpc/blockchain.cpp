@@ -1,7 +1,7 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020 Uladzimir (https://t.me/vovanchik_net) for Doge 
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -25,8 +25,14 @@
 #include <streams.h>
 #include <sync.h>
 #include <txdb.h>
+#include <pow.h>
+#include <miner.h>
+#include <timedata.h>
+#include <base58.h>
+#include <shutdown.h>
 #include <txmempool.h>
 #include <util.h>
+#include <utilmoneystr.h>
 #include <utilstrencodings.h>
 #include <hash.h>
 #include <validationinterface.h>
@@ -100,7 +106,7 @@ UniValue blockheaderToJSON(const CBlockIndex* blockindex)
     result.pushKV("nonce", (uint64_t)blockindex->nNonce);
     result.pushKV("bits", strprintf("%08x", blockindex->nBits));
     result.pushKV("difficulty", GetDifficulty(blockindex));
-    result.pushKV("chainwork", blockindex->nChainWork.GetHex());
+    result.pushKV("chainwork", blockindex->nChainWork().GetHex());
     result.pushKV("nTx", (uint64_t)blockindex->nTx);
 
     if (blockindex->pprev)
@@ -146,7 +152,7 @@ UniValue blockToJSON(const CBlock& block, const CBlockIndex* blockindex, bool tx
     result.pushKV("nonce", (uint64_t)block.nNonce);
     result.pushKV("bits", strprintf("%08x", block.nBits));
     result.pushKV("difficulty", GetDifficulty(blockindex));
-    result.pushKV("chainwork", blockindex->nChainWork.GetHex());
+    result.pushKV("chainwork", blockindex->nChainWork().GetHex());
     result.pushKV("nTx", (uint64_t)blockindex->nTx);
 
     if (blockindex->pprev)
@@ -1122,20 +1128,7 @@ static UniValue SoftForkMajorityDesc(int version, CBlockIndex* pindex, const Con
             activated = pindex->nHeight >= consensusParams.BIP66Height;
             break;
         case 4:
-            int nFound = 0;
-            int nRequired = consensusParams.nMajorityRejectBlockOutdated;
-            CBlockIndex* pstart = pindex;
-            for (int i = 0; i < consensusParams.nMajorityWindow && pstart != NULL; i++)
-            {
-                if (pstart->GetBaseVersion() >= version)
-                    ++nFound;
-                pstart = pstart->pprev;
-            }
-
-            activated = nFound >= nRequired;
-            rv.push_back(Pair("found", nFound));
-            rv.push_back(Pair("required", nRequired));
-            rv.push_back(Pair("window", consensusParams.nMajorityWindow)); 
+            activated = pindex->nHeight >= consensusParams.BIP65Height;
             break;
     }
     rv.pushKV("status", activated);
@@ -1182,22 +1175,6 @@ UniValue getblockchaininfo(const JSONRPCRequest& request)
             "        },\n"
             "     }, ...\n"
             "  ],\n"
-            "  \"bip9_softforks\": {           (object) status of BIP9 softforks in progress\n"
-            "     \"xxxx\" : {                 (string) name of the softfork\n"
-            "        \"status\": \"xxxx\",       (string) one of \"defined\", \"started\", \"locked_in\", \"active\", \"failed\"\n"
-            "        \"bit\": xx,              (numeric) the bit (0-28) in the block version field used to signal this softfork (only for \"started\" status)\n"
-            "        \"startTime\": xx,        (numeric) the minimum median time past of a block at which the bit gains its meaning\n"
-            "        \"timeout\": xx,          (numeric) the median time past of a block at which the deployment is considered failed if not yet locked in\n"
-            "        \"since\": xx,            (numeric) height of the first block to which the status applies\n"
-            "        \"statistics\": {         (object) numeric statistics about BIP9 signalling for a softfork (only for \"started\" status)\n"
-            "           \"period\": xx,        (numeric) the length in blocks of the BIP9 signalling period \n"
-            "           \"threshold\": xx,     (numeric) the number of blocks with the version bit set required to activate the feature \n"
-            "           \"elapsed\": xx,       (numeric) the number of blocks elapsed since the beginning of the current period \n"
-            "           \"count\": xx,         (numeric) the number of blocks with the version bit set in the current period \n"
-            "           \"possible\": xx       (boolean) returns false if there are not enough blocks left in this period to pass activation threshold \n"
-            "        }\n"
-            "     }\n"
-            "  }\n"
             "  \"warnings\" : \"...\",           (string) any network and blockchain warnings.\n"
             "}\n"
             "\nExamples:\n"
@@ -1216,7 +1193,7 @@ UniValue getblockchaininfo(const JSONRPCRequest& request)
     obj.pushKV("mediantime",            (int64_t)chainActive.Tip()->GetMedianTimePast());
     obj.pushKV("verificationprogress",  GuessVerificationProgress(Params().TxData(), chainActive.Tip()));
     obj.pushKV("initialblockdownload",  IsInitialBlockDownload());
-    obj.pushKV("chainwork",             chainActive.Tip()->nChainWork.GetHex());
+    obj.pushKV("chainwork",             chainActive.Tip()->nChainWork().GetHex());
     obj.pushKV("size_on_disk",          CalculateCurrentUsage());
     obj.pushKV("pruned",                fPruneMode);
     if (fPruneMode) {
@@ -1239,12 +1216,12 @@ UniValue getblockchaininfo(const JSONRPCRequest& request)
     const Consensus::Params& consensusParams = Params().GetConsensus();
     CBlockIndex* tip = chainActive.Tip();
     UniValue softforks(UniValue::VARR);
-    UniValue bip9_softforks(UniValue::VOBJ);
     softforks.push_back(SoftForkDesc("bip34", 2, tip, consensusParams));
     softforks.push_back(SoftForkDesc("bip66", 3, tip, consensusParams));
     softforks.push_back(SoftForkDesc("bip65", 4, tip, consensusParams));
+    softforks.pushKV("CSV", consensusParams.CSVHeight);
+    softforks.pushKV("Segwit", consensusParams.WitnessHeight);
     obj.pushKV("softforks",             softforks);
-    obj.pushKV("bip9_softforks", bip9_softforks);
 
     obj.pushKV("warnings", GetWarnings("statusbar"));
     return obj;
@@ -2145,6 +2122,351 @@ UniValue scantxoutset(const JSONRPCRequest& request)
     return result;
 }
 
+// new function
+
+static FILE *cfile_ptr = NULL;
+static int cfile_numinfile = 0;
+static int cfile_count = 0;
+static std::string eol = "\n";
+
+void logWrite (const std::string str) {
+	if (str == "*") { if (cfile_ptr != NULL) fclose(cfile_ptr); cfile_ptr = NULL; return; }
+	if ((cfile_ptr != NULL) && (cfile_numinfile > 99999)) { fclose(cfile_ptr); cfile_ptr = NULL; }
+	if (cfile_ptr == NULL) { 
+		std::string cd = GetDataDir().string() + "\\log\\";
+		TryCreateDirectories(cd);
+		cfile_ptr = fsbridge::fopen(cd + strprintf("%06i", ++cfile_count) + ".log", "a");
+		cfile_numinfile = 0;
+	}
+    fwrite(str.data(), 1, str.size(), cfile_ptr);
+    fwrite(eol.data(), 1, eol.size(), cfile_ptr);
+	cfile_numinfile++;
+}
+
+std::string scriptToAddr (const CScript& script) {
+    std::string ret = "";
+    CTxDestination address;
+    if (ExtractDestination(script, address)) ret = EncodeDestination (address);
+    if (ret.empty()) ret = ScriptToAsmStr (script, true);
+    return ret;
+}
+
+std::string getInAddr (const CTransaction& txTo, int nIn, std::string& data, bool ext = false) {
+	CScript script = txTo.vin[nIn].scriptSig;
+	CScript::const_iterator iter = script.begin();
+	opcodetype opcode, opcode2;
+	std::vector<unsigned char> vch, vch2;
+	data = ScriptToAsmStr(script, true);
+    if (script.GetOp(iter, opcode, vch)) {
+		if (((opcode == 0x47) || (opcode == 0x48)) && (script.GetOp(iter, opcode2, vch2))) {  
+			if ((opcode2 == 0x21) || (opcode2 == 0x41)) {
+				CScript scriptCode = GetScriptForDestination (CPubKey(vch2).GetID());
+				if (ext) {
+					std::vector<unsigned char> vchSig2(vch);
+					uint256 sighash;
+					if (!vchSig2.empty()) {
+						int nHashType = vchSig2.back();
+						vchSig2.pop_back();
+						CAmount amount = 0;	
+						sighash = SignatureHash (scriptCode, txTo, nIn, nHashType, amount, SigVersion::BASE, NULL);
+						CPubKey pubkey(vch2);
+						if (!pubkey.Verify(sighash, vchSig2)) { sighash.SetNull(); }
+					}
+					data = " (Hash = " + sighash.ToString() + ", Pubkey = " + HexStr(vch2.begin(), vch2.end()) +
+						", Sign = " + HexStr(vch.begin(), vch.end()) + ")";
+				}
+                return EncodeDestination (CPubKey(vch2).GetID());	
+			}
+		}			
+		if ((opcode == 0x22) || (opcode == 0x21)) {	return "Script ()"; }
+	}
+	return "";
+}
+
+std::string getOutAddr (const CScript& script, int* stdd = NULL) {
+    if (stdd) {
+        *stdd = 0;
+        std::vector<std::vector<unsigned char>> solns;
+        txnouttype type;
+        Solver(script, type, solns);
+        if (type == TX_PUBKEYHASH)  { *stdd = 1; } else
+        if (type == TX_SCRIPTHASH)  { *stdd = 2; } else
+        if (type == TX_PUBKEY)      { *stdd = 3; } else
+        if (type == TX_MULTISIG)    { *stdd = 4; } else
+        if (type == TX_WITNESS_V0_KEYHASH)      { *stdd = 5; } else
+        if (type == TX_WITNESS_V0_SCRIPTHASH)   { *stdd = 6; }
+    }
+    return scriptToAddr (script);
+}
+
+void setProgress (int p1, int p2) {
+	//if (p1 > 0) uiInterface.ShowProgress(_("xcash..."), p1/100000);
+//	if (p1 >= 0) setInfo (1, p1);
+// 	if (p2 >= 0) setInfo (2, p2);
+	if (((p1 % 1000000) == 0) && (p1 > 0)) logWrite (strprintf("Total %d of %d", p2, p1));
+	if ((p1==0) && (p2==0))	logWrite ("*");
+	//if ((p1==0) && (p2==0))	uiInterface.ShowProgress(_("xcash..."), 100);
+}
+
+UniValue dumpcoin (const JSONRPCRequest& request) {
+    if (request.fHelp)
+        throw std::runtime_error(
+            "dumpcoin \n"
+            "\nDump free coin from DB\n"
+            "\nArguments:\n"
+            "1. minout    (numeric) Min amount to output in 1 nano (default: 100000 eq 1 Taler).\n"
+            "\nExamples:\n"
+            + HelpExampleCli("dumpcoin", "")
+		);
+		
+    int cnt1 = 0;
+    int cnt2 = 0;
+    uint64_t border = 1000;
+    UniValue ret(UniValue::VOBJ);
+    if (!toInt64 (request, 0, border, ret)) return ret;
+
+    CCoinsViewDB pcoinsdbview2(0);
+    std::unique_ptr<CCoinsViewCursor> pcursor(pcoinsdbview2.Cursor());	
+    while (pcursor->Valid()) {
+        COutPoint key;
+        Coin coin;
+        if (pcursor->GetKey(key) && pcursor->GetValue(coin) && (!coin.IsSpent())) {
+            if (coin.out.nValue >= border) {
+                logWrite (strprintf("%s:%d (%d) = %s (%s)", key.hash.GetHex(), key.n, coin.nHeight,
+                    getOutAddr (coin.out.scriptPubKey), FormatMoney(coin.out.nValue)));
+                setProgress (++cnt1, ++cnt2);
+            } else { setProgress (++cnt1, -1); }
+        }
+        pcursor->Next();
+        if (ShutdownRequested()) break;
+    }
+	setProgress (0, 0);
+    ret.push_back(Pair("success", "true"));
+    return ret;
+}
+
+UniValue dumpblock (const JSONRPCRequest& request) {
+    if (request.fHelp)
+        throw std::runtime_error(
+            "dumpblock\n"
+            "\nArguments:\n"
+            "1. startblock      (numeric, optional) Start block to output (default: last).\n"
+            "2. numblock        (numeric, optional) Num block to output (default: 999).\n"
+            "3. extinfo         (numeric, optional) Extended info for block (default: 0).\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("dumpblock", "")
+        );
+
+    uint32_t startblock = 9999999;
+    uint32_t numblock = 999;
+    uint32_t ext = 0;
+    UniValue ret(UniValue::VOBJ);
+    if (!toInt32 (request, 0, startblock, ret)) return ret;
+    if (!toInt32 (request, 1, numblock, ret)) return ret;
+    if (!toInt32 (request, 2, ext, ret)) return ret;
+    int64_t powspace = Params().GetConsensus().nPowTargetSpacing;
+    int64_t powcnt = 120, needpow = powspace / 5 * powcnt;
+    
+    uint32_t n = chainActive.Height(), m = 0;
+    if (startblock > n) { if (numblock < n) { m = n - numblock; } } else
+        { if (numblock < (n - startblock)) 	{ m = startblock; n = m + numblock; } else { m = startblock; } }
+	for(int i=m; i<n; i++) {
+		CBlock block;
+		CBlockIndex* pindex = chainActive[i];
+	    if (fHavePruned && !(pindex->nStatus & BLOCK_HAVE_DATA) && pindex->nTx > 0) {
+			logWrite (strprintf("chain %d not found on disk (pruned)", i));
+			continue;
+		}
+		if (!ReadBlockFromDisk(block, pindex, Params().GetConsensus())) {
+			logWrite (strprintf("chain %d not found on disk", i));
+			continue;
+		}
+
+		logWrite (strprintf("chain = %d, hash = %s, time = %s {", 
+			i, pindex->GetBlockHash().ToString(), FormatISO8601DateTime (pindex->GetBlockTime())));
+		for (const auto& atx : block.vtx) {
+			const CTransaction& tx = *atx;
+			logWrite ("    tx: " + tx.GetHash().GetHex() + " {");
+			for (int j = 0; j < tx.vin.size(); j++) {
+				const CTxIn& txin = tx.vin[j];
+				if (tx.IsCoinBase()) {
+					logWrite ("        in: mining, " + HexStr(txin.scriptSig.begin(), txin.scriptSig.end()));
+				} else {
+                    std::string data;
+					logWrite (strprintf("        in%d: %s, %s:%d, %s", j, getInAddr(tx, j, data, ext != 0), 
+                        txin.prevout.hash.GetHex(), txin.prevout.n, data)); 
+                    if ((ext != 0) && (txin.scriptWitness.stack.size() > 0))
+						logWrite (strprintf("            Witness = %s", txin.scriptWitness.ToString()));
+				}
+			}
+			for (int k = 0; k < tx.vout.size(); k++) {
+				const CTxOut& txout = tx.vout[k];
+                logWrite (strprintf("        out%d: %s, %s", k, FormatMoney(txout.nValue), getOutAddr (txout.scriptPubKey)));
+			}
+			if (ext != 0) logWrite ("        tx detail " + tx.ToString());
+			if (ext != 0) logWrite ("        tx hex " + EncodeHexTx(tx)); 
+			logWrite ("    }");
+			if (ShutdownRequested()) break;
+		}
+		logWrite ("}");
+	}
+	logWrite ("*");
+    ret.push_back(Pair("success", "true"));
+    return ret;
+}
+
+std::string show_prc (int val, int total) {
+	if (total == 0) return "0.00";
+	double prc = (100.0*(double)val)/(double)total;
+	return strprintf("%d.%02d", (int)prc, (((int)(100*prc))%100));
+}
+
+void show_log (const int data[9], int& count, const uint64_t sdata[9], uint64_t& scount) {
+	count = data[0] + data[1] + data[2] + data[3] + data[4] + data[5] + data[6] + data[7] + data[8] + data[9];
+	scount = sdata[0] + sdata[1] + sdata[2] + sdata[3] + sdata[4] + sdata[5] + sdata[6] + sdata[7] + sdata[8] + sdata[9];
+	logWrite(strprintf(" <     1000 =  %d (%s), sum = %s", data[0], show_prc (data[0], count), FormatMoney(sdata[0])));
+	logWrite(strprintf(" <    10000 =  %d (%s), sum = %s", data[1], show_prc (data[1], count), FormatMoney(sdata[1])));
+	logWrite(strprintf(" <   100000 =  %d (%s), sum = %s", data[2], show_prc (data[2], count), FormatMoney(sdata[2])));
+	logWrite(strprintf(" <   1 CENT =  %d (%s), sum = %s", data[3], show_prc (data[3], count), FormatMoney(sdata[3])));
+	logWrite(strprintf(" <  10 CENT =  %d (%s), sum = %s", data[4], show_prc (data[4], count), FormatMoney(sdata[4])));
+	logWrite(strprintf(" <   1 COIN =  %d (%s), sum = %s", data[5], show_prc (data[5], count), FormatMoney(sdata[5])));
+	logWrite(strprintf(" <  10 COIN =  %d (%s), sum = %s", data[6], show_prc (data[6], count), FormatMoney(sdata[6])));
+	logWrite(strprintf(" < 100 COIN =  %d (%s), sum = %s", data[7], show_prc (data[7], count), FormatMoney(sdata[7])));
+	logWrite(strprintf(" > 100 COIN =  %d (%s), sum = %s", data[8], show_prc (data[8], count), FormatMoney(sdata[8])));
+	logWrite(strprintf(" >1000 COIN =  %d (%s), sum = %s", data[9], show_prc (data[9], count), FormatMoney(sdata[9])));
+}
+
+static int cntArr[10][10] = { 0 };
+static uint64_t sumArr[10][10] = { 0 };
+
+bool doCalcAndMode (const CTxOut& out, int Height, const COutPoint& point, int limit) {
+    int mode = 0;
+    if (out.nValue >=1000 * COIN) { mode = 9; } else
+    if (out.nValue >= 100 * COIN) { mode = 8; } else
+    if (out.nValue >=  10 * COIN) { mode = 7; } else
+    if (out.nValue >=   1 * COIN) { mode = 6; } else
+    if (out.nValue >=  10 * CENT) { mode = 5; } else
+    if (out.nValue >=   1 * CENT) { mode = 4; } else
+    if (out.nValue >=     100000) { mode = 3; } else
+    if (out.nValue >=      10000) { mode = 2; } else
+    if (out.nValue >=       1000) { mode = 1; }
+    int stdd = -1;
+    std::string rec = getOutAddr (out.scriptPubKey, &stdd);
+    if (stdd == 1) { cntArr[1][mode]++; sumArr[1][mode] += out.nValue; } else
+    if (stdd == 2) { cntArr[2][mode]++; sumArr[2][mode] += out.nValue; } else
+    if (stdd == 3) { cntArr[3][mode]++; sumArr[3][mode] += out.nValue; } else
+    if (stdd == 4) { cntArr[4][mode]++; sumArr[4][mode] += out.nValue; } else
+    if (stdd == 5) { cntArr[5][mode]++; sumArr[5][mode] += out.nValue; } else
+    if (stdd == 6) { cntArr[6][mode]++; sumArr[6][mode] += out.nValue; } else
+                   { cntArr[0][mode]++; sumArr[0][mode] += out.nValue; };
+    bool isprint = (stdd == 0) || (mode >= limit);
+    if (isprint) logWrite (strprintf("%s:%d (%d) = %s (%s)",
+        point.hash.GetHex(), point.n, Height, FormatMoney(out.nValue), rec));
+    return isprint;
+}
+
+UniValue dumpaddress (const JSONRPCRequest& request) {
+    if (request.fHelp)
+        throw std::runtime_error(
+            "dumpaddress\n"
+            "\nDump info from DB\n"
+            "\nExamples:\n"
+            + HelpExampleCli("dumpaddress", "")
+        );
+    int cnt1 = 0;
+    int cnt2 = 0;
+    int limit = 8;
+    for(int i=0; i<10; i++) { // UNK, HASH160, SCRIPT, PUBKEY, MultiHASH160, Withness_HASH160, Withness_SCRIPT
+        for(int j=0; j<10; j++) { cntArr[i][j] = 0; sumArr[i][j] = 0; }
+    }
+
+    std::unordered_map<std::string, std::pair<CAmount, int>> mapAddr;
+
+        CCoinsViewDB pcoinsdbview2(0);
+        std::unique_ptr<CCoinsViewCursor> pcursor(pcoinsdbview2.Cursor());	
+        while (pcursor->Valid()) {
+            COutPoint key;
+            Coin coin;
+            if (pcursor->GetKey(key) && pcursor->GetValue(coin) && (!coin.IsSpent())) {
+                if (doCalcAndMode (coin.out, coin.nHeight, key, limit)) { setProgress (++cnt1, ++cnt2); } 
+                                                                   else { setProgress (++cnt1, -1); }
+                std::string addr = scriptToAddr (coin.out.scriptPubKey);
+                std::pair<CAmount, int> pp;
+                if (mapAddr.count(addr) > 0) { pp = mapAddr[addr]; } else { pp = {0, 0}; }
+                pp.first += coin.out.nValue;
+                pp.second ++;
+                mapAddr[addr] = pp;
+            }
+            pcursor->Next();
+            if (ShutdownRequested()) break;
+        }
+
+    for (const auto& entry : mapAddr) {
+        std::pair<CAmount, int> pp = entry.second;
+        if (pp.first > 0) 
+            logWrite (strprintf("%s = %s (%d)", entry.first, FormatMoney(pp.first), pp.second));
+    }
+    setProgress (0, 0);
+
+    int count[7];
+    uint64_t scount[7];
+    logWrite (" ===   HASH160   === ");         show_log (cntArr[1], count[1], sumArr[1], scount[1]);
+    logWrite (" ===   SCRIPT   === ");          show_log (cntArr[2], count[2], sumArr[2], scount[2]);
+    logWrite (" ===   PUBKEY   === ");          show_log (cntArr[3], count[3], sumArr[3], scount[3]);
+    logWrite (" ===   MultiHASH160   === ");    show_log (cntArr[4], count[4], sumArr[4], scount[4]);
+    logWrite (" ===   Withness_HASH160   === ");show_log (cntArr[5], count[5], sumArr[5], scount[5]);
+    logWrite (" ===   Withness_SCRIPT   === "); show_log (cntArr[6], count[6], sumArr[6], scount[6]);
+    logWrite (" ===   UNK   === ");             show_log (cntArr[0], count[0], sumArr[0], scount[0]);
+
+    logWrite (" ===   TOTAL   ===");
+    int total = count[1] + count[2] + count[3] + count[4] + count[5] + count[6] + count[0];
+    logWrite (strprintf(" HASH160          = %d (%s), sum = %s", count[1], show_prc (count[1], total), FormatMoney(scount[1])));
+    logWrite (strprintf(" SCRIPT           = %d (%s), sum = %s", count[2], show_prc (count[2], total), FormatMoney(scount[2])));
+    logWrite (strprintf(" PUBKEY           = %d (%s), sum = %s", count[3], show_prc (count[3], total), FormatMoney(scount[3])));
+    logWrite (strprintf(" MultiHASH160     = %d (%s), sum = %s", count[4], show_prc (count[4], total), FormatMoney(scount[4])));
+    logWrite (strprintf(" Withness_HASH160 = %d (%s), sum = %s", count[5], show_prc (count[5], total), FormatMoney(scount[5])));
+    logWrite (strprintf(" Withness_SCRIPT  = %d (%s), sum = %s", count[6], show_prc (count[6], total), FormatMoney(scount[6])));
+    logWrite (strprintf(" UNK              = %d (%s), sum = %s", count[7], show_prc (count[7], total), FormatMoney(scount[7])));
+
+    logWrite ("");
+    uint64_t stotal = scount[1] + scount[2] + scount[3] + scount[4] + scount[5] + scount[6] + scount[0];
+    logWrite (strprintf(" total = %s", FormatMoney(stotal)));
+	setProgress (0, 0);
+
+    UniValue ret(UniValue::VOBJ);
+    ret.push_back(Pair("success", "true"));			
+    return ret;
+}
+
+UniValue genpaper (const JSONRPCRequest& request) {
+    if (request.fHelp || request.params.size() != 1)
+        throw std::runtime_error(
+            "genpaper\n"
+            "\nArguments:\n"
+            "1. humanpass       (string) Paper wallet pass\n"
+            "}\n"
+            "\nExamples:\n"
+            + HelpExampleCli("genpaper", "mycoinpass")
+        );
+
+    std::string s_key = request.params[0].get_str();
+    uint256 hash;
+    CSHA256().Write((unsigned char*)s_key.c_str(), s_key.size()).Finalize((unsigned char*)&hash);
+    CKey key;
+    key.Set(hash.begin(), hash.end(), true);
+    CPubKey pubkey = key.GetPubKey();
+    CKeyID addr = pubkey.GetID();
+
+    UniValue ret(UniValue::VOBJ);
+    ret.pushKV("human", s_key);
+    ret.pushKV("Private", EncodeSecret(key));
+    ret.pushKV("PrivateHex", HexStr(key.begin(), key.end()));
+    ret.pushKV("PublicHex", HexStr(pubkey.begin(), pubkey.end()));
+    ret.pushKV("Address", EncodeDestination(addr));
+    return ret;
+}
+
 static const CRPCCommand commands[] =
 { //  category              name                      actor (function)         argNames
   //  --------------------- ------------------------  -----------------------  ----------
@@ -2171,6 +2493,11 @@ static const CRPCCommand commands[] =
 
     { "blockchain",         "preciousblock",          &preciousblock,          {"blockhash"} },
     { "blockchain",         "scantxoutset",           &scantxoutset,           {"action", "scanobjects"} },
+
+    { "dump",         	    "dumpcoin",           	  &dumpcoin,               {"minout"} },
+    { "dump",         	    "dumpblock",         	  &dumpblock,              {"startblock", "numblock", "ext"} },
+    { "dump",               "dumpaddress",       	  &dumpaddress,            {} }, 
+    { "paper",              "genpaper",       	      &genpaper,               {"humanpass"} }, 
 
     /* Not shown in help */
     { "hidden",             "invalidateblock",        &invalidateblock,        {"blockhash"} },

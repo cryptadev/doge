@@ -1,4 +1,5 @@
 // Copyright (c) 2016-2018 The Bitcoin Core developers
+// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -79,10 +80,11 @@ void ModalOverlay::tipUpdate(int count, const QDateTime& blockDate, double nVeri
     QDateTime currentDate = QDateTime::currentDateTime();
 
     // keep a vector of samples of verification progress at height
-    blockProcessTime.push_front(qMakePair(currentDate.toMSecsSinceEpoch(), nVerificationProgress));
+    if (nVerificationProgress > 0)
+        blockProcessTime.push_front(qMakePair(currentDate.toMSecsSinceEpoch(), nVerificationProgress));
 
     // show progress speed if we have more than one sample
-    if (blockProcessTime.size() >= 2) {
+    if ((blockProcessTime.size() >= 2) || (nVerificationProgress == 0)) {
         double progressDelta = 0;
         double progressPerHour = 0;
         qint64 timeDelta = 0;
@@ -116,12 +118,16 @@ void ModalOverlay::tipUpdate(int count, const QDateTime& blockDate, double nVeri
         }
     }
 
-    // show the last block date
-    ui->newestBlockDate->setText(blockDate.toString());
+    static bool init = false;
+    if ((nVerificationProgress > 0) || !init) {
+        init = true;
+        // show the last block date
+        ui->newestBlockDate->setText(blockDate.toString());
 
-    // show the percentage done according to nVerificationProgress
-    ui->percentageProgress->setText(QString::number(nVerificationProgress*100, 'f', 2)+"%");
-    ui->progressBar->setValue(nVerificationProgress*100);
+        // show the percentage done according to nVerificationProgress
+        ui->percentageProgress->setText(QString::number(nVerificationProgress*100, 'f', 2)+"%");
+        ui->progressBar->setValue(nVerificationProgress*100);
+    }
 
     if (!bestHeaderDate.isValid())
         // not syncing
