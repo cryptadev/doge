@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -312,84 +312,86 @@ void AddCoins(CCoinsViewCache& cache, const CTransaction& tx, int nHeight, bool 
 // lookups to database, so it should be used with care.
 const Coin& AccessByTxid(const CCoinsViewCache& cache, const uint256& txid);
 
-struct CAddressKey {
+class CAddressKey {
+public:
     CScript script;
     COutPoint out;
+
+    CAddressKey() : script(), out() { }
+
+    CAddressKey(const CScript& ascript, const COutPoint& aout);
+
+    CAddressKey(const CAddressKey &pp) {
+        script = pp.script;
+        out = pp.out;
+    }
 
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action) {
         READWRITE(script);
-        READWRITE(out);
+        READWRITE(out.hash);
+        READWRITE(VARINT(out.n));
     }
 
-    CAddressKey(const CScript& pscript, const COutPoint& pout);
-
-    CAddressKey() {
-        SetNull();
+    friend bool operator<(const CAddressKey& a, const CAddressKey& b) {
+        return a.out < b.out;
     }
 
-    std::string GetAddr (bool notnull = false);
-
-    void SetNull() {
-        script.clear();
-        out.SetNull();
+    friend bool operator==(const CAddressKey& a, const CAddressKey& b) {
+        return (a.script == b.script) && (a.out == b.out);
     }
 
-    bool IsNull() const {
-        return out.IsNull();
+    friend bool operator!=(const CAddressKey& a, const CAddressKey& b) {
+        return !(a == b);
     }
+
+    std::string GetAddr () const;
 };
 
-struct CAddressValue {
+class CAddressValue {
+public:
     CAmount value;
     uint32_t height;
+    bool iscoinbase;
+    uint32_t spend_height;
     uint256 spend_hash;
     uint32_t spend_n;
-    uint32_t spend_height;
+
+    CAddressValue() : value(0), height(0), iscoinbase(false), spend_height(0), spend_hash(), spend_n(0) { }
+
+    CAddressValue(CAmount avalue, uint32_t aheight, bool aiscoinbase, uint32_t aspend_height = 0,
+                const uint256& aspend_hash = uint256(), uint32_t aspend_n = 0) {
+        value = avalue;
+        height = aheight;
+        iscoinbase = aiscoinbase;
+        spend_height = aspend_height;
+        spend_hash = aspend_hash;
+        spend_n = aspend_n;
+    }
+
+    CAddressValue(const CAddressValue &pp) {
+        value = pp.value;
+        height = pp.height;
+        iscoinbase = pp.iscoinbase;
+        spend_height = pp.spend_height;
+        spend_hash = pp.spend_hash;
+        spend_n = pp.spend_n;
+    }
 
     ADD_SERIALIZE_METHODS;
 
     template <typename Stream, typename Operation>
     inline void SerializationOp(Stream& s, Operation ser_action) {
         READWRITE(value);
-        READWRITE(height);
-        READWRITE(spend_height);
+        READWRITE(VARINT(height));
+        READWRITE(iscoinbase);
+        READWRITE(VARINT(spend_height));
         if (spend_height > 0) {
             READWRITE(spend_hash);
-            READWRITE(spend_n);
+            READWRITE(VARINT(spend_n));
         }
-    }
-
-    CAddressValue(CAmount pvalue, uint32_t pheight) {
-        SetNull();
-        value = pvalue;
-        height = pheight;
-    }
-
-    CAddressValue(CAmount pvalue, uint32_t pheight, uint32_t pspend_height, const uint256& pspend_hash, uint32_t pspend_n) {
-        value = pvalue;
-        height = pheight;
-        spend_height = pspend_height;
-        spend_hash = pspend_hash;
-        spend_n = pspend_n;
-    }
-
-    CAddressValue() {
-        SetNull();
-    }
-
-    void SetNull() {
-        value = 0;
-        height = 0;
-        spend_height = 0;
-        spend_hash.SetNull();
-        spend_n = 0;
-    }
-
-    bool IsNull() const {
-        return (height == 0);
     }
 };
 

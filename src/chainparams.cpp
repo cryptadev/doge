@@ -1,7 +1,7 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,6 +13,8 @@
 #include <utilstrencodings.h>
 
 #include <assert.h>
+
+#include <chainparamsseeds.h>
 
 static CBlock CreateGenesisBlock(const char* pszTimestamp, const CScript& genesisOutputScript, uint32_t nTime, uint32_t nNonce, uint32_t nBits, int32_t nVersion, const CAmount& genesisReward)
 {
@@ -90,10 +92,10 @@ public:
         consensus.DisallowLegacyBlocksHeight = 371337;
 
         // The best chain should have at least this much work.
-        consensus.nMinimumChainWork = uint256S("0x0000000000000000000000000000000000000000000002f090e3e57191fd0703"); // 3,000,000
+        consensus.nMinimumChainWork = uint256S("0x00000000000000000000000000000000000000000000062c6548c010ba485933"); // 4,000,000
 
         // By default assume that the signatures in ancestors of this block are valid.
-        consensus.defaultAssumeValid = uint256S("0x195a83b091fb3ee7ecb56f2e63d01709293f57f971ccf373d93890c8dc1033db"); // 3,000,000
+        consensus.defaultAssumeValid = uint256S("0x47f227cd54c270aa18c5136635fc003a11cb82d6f8319dd8dab180a2f5555a9e"); // 4,000,000
 
         /**
          * The message start string is designed to be unlikely to occur in normal data.
@@ -126,7 +128,7 @@ public:
         bech32_hrp = "";
 
         vFixedSeeds.clear();
-        //vFixedSeeds = std::vector<SeedSpec6>(pnSeed6_main, pnSeed6_main + ARRAYLEN(pnSeed6_main));
+        vFixedSeeds = std::vector<SeedSpec6>(pnSeed6_main, pnSeed6_main + ARRAYLEN(pnSeed6_main));
 
         fDefaultConsistencyChecks = false;
         fRequireStandard = true;
@@ -141,12 +143,10 @@ public:
                 { 450000, uint256S("0xd279277f8f846a224d776450aa04da3cf978991a182c6f3075db4c48b173bbd7")},
                 { 771275, uint256S("0x1b7d789ed82cbdc640952e7e7a54966c6488a32eaad54fc39dff83f310dbaaed")},
                 { 1000000, uint256S("0x6aae55bea74235f0c80bd066349d4440c31f2d0f27d54265ecd484d8c1d11b47")},
-                { 1250000, uint256S("0x00c7a442055c1a990e11eea5371ca5c1c02a0677b33cc88ec728c45edc4ec060")},
-                { 1500000, uint256S("0xf1d32d6920de7b617d51e74bdf4e58adccaa582ffdc8657464454f16a952fca6")},
-                { 1750000, uint256S("0x5c8e7327984f0d6f59447d89d143e5f6eafc524c82ad95d176c5cec082ae2001")},
                 { 2000000, uint256S("0x9914f0e82e39bbf21950792e8816620d71b9965bdbbc14e72a95e3ab9618fea8")},
-                { 2031142, uint256S("0x893297d89afb7599a3c571ca31a3b80e8353f4cf39872400ad0f57d26c4c5d42")},
-                { 2510150, uint256S("0x77e3f4a4bcb4a2c15e8015525e3d15b466f6c022f6ca82698f329edef7d9777e")},
+                { 3000000, uint256S("0x195a83b091fb3ee7ecb56f2e63d01709293f57f971ccf373d93890c8dc1033db")},
+                { 4000000, uint256S("0x47f227cd54c270aa18c5136635fc003a11cb82d6f8319dd8dab180a2f5555a9e")},
+                { 4500000, uint256S("0x66d27fdeb0f694d06d1276b2d3d72c4dbefe294651ddc1ade220951823243396")},
             }
         };
 
@@ -215,7 +215,8 @@ public:
 
         bech32_hrp = "";
 
-        //vFixedSeeds = std::vector<SeedSpec6>(pnSeed6_test, pnSeed6_test + ARRAYLEN(pnSeed6_test));
+        vFixedSeeds.clear();
+        vFixedSeeds = std::vector<SeedSpec6>(pnSeed6_test, pnSeed6_test + ARRAYLEN(pnSeed6_test));
 
         fDefaultConsistencyChecks = false;
         fRequireStandard = false;

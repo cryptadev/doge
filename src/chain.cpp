@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -13,20 +13,26 @@
 CBlockHeader CBlockIndex::GetBlockHeader() const {
     CBlockHeader header;
     header.nVersion       = nVersion;
-    if (header.IsAuxpow()) {
-        CBlock block;
-        if (ReadBlockFromDisk(block, this, Params().GetConsensus())) {
-            return block.GetBlockHeader();
-        } else {
-            LogPrintf ("!!!HEADER READ ERROR!!! hash=%s\n", GetBlockHash().ToString());
-        }
-    }
     if (pprev)
         header.hashPrevBlock = pprev->GetBlockHash();
     header.hashMerkleRoot = hashMerkleRoot;
     header.nTime          = nTime;
     header.nBits          = nBits;
     header.nNonce         = nNonce;
+    if (header.IsAuxpow()) {
+        CAuxPow auxpow;
+        if (pblockaux->ReadBlockAux (*phashBlock, auxpow)) {
+            header.auxpow.reset(new CAuxPow());
+            *header.auxpow = auxpow;
+        } else {
+            CBlock block;
+            if (ReadBlockFromDisk(block, this, Params().GetConsensus())) {
+                header = block.GetBlockHeader();
+            } else {
+                LogPrintf ("!!!HEADER READ ERROR!!! hash=%s\n", GetBlockHash().ToString());
+            }
+        }
+    }
     return header;
 }
 
@@ -36,6 +42,8 @@ void CBlockIndex::SetBlockHeader (const CBlockHeader& header) {
     nTime          = header.nTime;
     nBits          = header.nBits;
     nNonce         = header.nNonce;
+    if (header.IsAuxpow())
+        pblockaux->WriteBlockAux (header.GetHash(), *(header.auxpow));
 }
 
 /**

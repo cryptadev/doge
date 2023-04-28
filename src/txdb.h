@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -119,6 +119,8 @@ public:
     bool ReadLastBlockFile(int &nFile);
     bool WriteReindexing(bool fReindexing);
     void ReadReindexing(bool &fReindexing);
+    bool ReadAddress (const CScript& script, std::map<CAddressKey, CAddressValue> &vec);
+    bool WriteAddresses (const std::map<CAddressKey, CAddressValue> &vec);
     bool WriteFlag(const std::string &name, bool fValue);
     bool ReadFlag(const std::string &name, bool &fValue);
     bool LoadBlockIndexGuts(const Consensus::Params& consensusParams, std::function<CBlockIndex*(const uint256&)> insertBlockIndex);
@@ -126,18 +128,26 @@ public:
 
 class CTxIndexDB : public CDBWrapper
 {
+private:
+    std::map<uint256, CDiskTxPos> Cache;
+    CCriticalSection CacheLock;
 public:
     explicit CTxIndexDB(bool fWipe);
-    bool ReadTxIndex(const uint256 &txid, CDiskTxPos &pos);
-    bool WriteTxIndex(const std::vector<std::pair<uint256, CDiskTxPos> > &vect);
+    bool ReadTxIndex (const uint256 &txid, CDiskTxPos &pos);
+    bool WriteTxIndex (const uint256 &txid, const CDiskTxPos &pos);
+    bool FlushTxIndex ();
 };
 
-class CAddressIndexDB : public CDBWrapper
+class CBlockAuxDB : public CDBWrapper
 {
+private:
+    std::map<uint256, CAuxPow> Cache;
+    CCriticalSection CacheLock;
 public:
-    explicit CAddressIndexDB(bool fWipe);
-    bool WriteAddress (const std::vector<std::pair<CAddressKey, CAddressValue>> &vec);
-    bool ReadAddress (const CScript& script, std::vector<std::pair<CAddressKey, CAddressValue>> &vec);
+    explicit CBlockAuxDB (bool fWipe);
+    bool ReadBlockAux (const uint256 &txid, CAuxPow &auxpow);
+    bool WriteBlockAux (const uint256 &txid, const CAuxPow &auxpow);
+    bool FlushBlockAux ();
 };
 
 #endif // BITCOIN_TXDB_H

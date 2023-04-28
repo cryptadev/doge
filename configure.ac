@@ -3,12 +3,12 @@ AC_PREREQ([2.60])
 define(_CLIENT_VERSION_MAJOR, 0)
 define(_CLIENT_VERSION_MINOR, 17)
 define(_CLIENT_VERSION_REVISION, 2)
-define(_CLIENT_VERSION_BUILD, 0)
+define(_CLIENT_VERSION_BUILD, 1)
 define(_CLIENT_VERSION_IS_RELEASE, true)
-define(_COPYRIGHT_YEAR, 2021)
-define(_COPYRIGHT_HOLDERS,[Uladzimir K. for %s])
+define(_COPYRIGHT_YEAR, 2023)
+define(_COPYRIGHT_HOLDERS,[Uladzimir for %s])
 define(_COPYRIGHT_HOLDERS_SUBSTITUTION,[[Doge]])
-AC_INIT([Doge],[_CLIENT_VERSION_MAJOR._CLIENT_VERSION_MINOR._CLIENT_VERSION_REVISION],[https://github.com/vovanchik-net/doge],[doge],[https://t.me/doge_vovanchik_net])
+AC_INIT([Doge],[_CLIENT_VERSION_MAJOR._CLIENT_VERSION_MINOR._CLIENT_VERSION_REVISION],[https://github.com/cryptadev/doge],[doge],[https://t.me/cryptadev])
 AC_CONFIG_SRCDIR([src/validation.cpp])
 AC_CONFIG_HEADERS([src/config/bitcoin-config.h])
 AC_CONFIG_AUX_DIR([build-aux])
@@ -162,7 +162,7 @@ AC_ARG_ENABLE([ccache],
   [AS_HELP_STRING([--disable-ccache],
   [do not use ccache for building (default is to use if found)])],
   [use_ccache=$enableval],
-  [use_ccache=no])
+  [use_ccache=auto])
 
 AC_ARG_ENABLE([lcov],
   [AS_HELP_STRING([--enable-lcov],

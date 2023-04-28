@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -51,15 +51,15 @@ std::shared_ptr<CWallet> GetWallet(const std::string& name);
 //! Default for -keypool
 static const unsigned int DEFAULT_KEYPOOL_SIZE = 250;
 //! -paytxfee default
-constexpr CAmount DEFAULT_PAY_TX_FEE = 0;
+constexpr CAmount DEFAULT_PAY_TX_FEE = 0.01 * COIN;
 //! -fallbackfee default
-static const CAmount DEFAULT_FALLBACK_FEE = 20000;
+static const CAmount DEFAULT_FALLBACK_FEE = 0.01 * COIN;
 //! -discardfee default
-static const CAmount DEFAULT_DISCARD_FEE = 10000;
+static const CAmount DEFAULT_DISCARD_FEE = 0.01 * COIN;
 //! -mintxfee default
-static const CAmount DEFAULT_TRANSACTION_MINFEE = 1000;
+static const CAmount DEFAULT_TRANSACTION_MINFEE = 0.01 * COIN;
 //! minimum recommended increment for BIP 125 replacement txs
-static const CAmount WALLET_INCREMENTAL_RELAY_FEE = 10000;
+static const CAmount WALLET_INCREMENTAL_RELAY_FEE = 0.001 * COIN;
 //! Default for -spendzeroconfchange
 static const bool DEFAULT_SPEND_ZEROCONF_CHANGE = true;
 //! Default for -walletrejectlongchains

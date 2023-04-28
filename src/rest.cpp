@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -646,7 +646,7 @@ bool api_chain (HTTPRequest* req, const std::string& strURIPart) {
     root.pushKV("chainwork",            chainActive.Tip()->nChainWork().GetHex()); 
     root.pushKV("size_on_disk",         CalculateCurrentUsage()); 
     root.pushKV("networkhash",          GetNetworkHash());
-    root.pushKV("mempool_size",         (uint64_t)mempool.size());
+    root.pushKV("mempool_count",        mempool.mapTx.size());
     return API_OK (req, root);
 }
 
@@ -873,11 +873,21 @@ bool api_tx (HTTPRequest* req, const std::string& strURIPart) {
         return API_ERROR (req, "tx hash " + strURIPart + " not found");
     UniValue root (UniValue::VOBJ);
     getTxData (root, tx, hashBlock);
+    CBlockIndex* pi = LookupBlockIndex(hashBlock);
+    if (pi) {
+        root.pushKV("blockhash", pi->GetBlockHash().GetHex());
+        int confirmations = -1;
+        if (chainActive.Contains(pi)) confirmations = chainActive.Height() - pi->nHeight + 1;
+        root.pushKV("blockconfirmations", confirmations);
+        root.pushKV("blockheight", pi->nHeight);
+        root.pushKV("blocktime", pi->GetBlockTime());
+    } else {
+        root.pushKV("blockhash", hashBlock.GetHex());
+        root.pushKV("blockconfirmations", (int)-1);
+        root.pushKV("blockheight", (int)-1);
+        root.pushKV("blocktime", (int)0);
+    }
     return API_OK (req, root);
-}
-
-bool heightSort(std::pair<CAddressKey, CAddressValue> a, std::pair<CAddressKey, CAddressValue> b) {
-    return a.second.height > b.second.height;
 }
 
 bool api_address (HTTPRequest* req, const std::string& strURIPart) {
@@ -895,47 +905,52 @@ bool api_address (HTTPRequest* req, const std::string& strURIPart) {
     }
     if (!IsValidDestination(DecodeDestination(sss))) 
         return API_ERROR (req, "address " + strURIPart + " is invalid");
-    std::vector<std::pair<CAddressKey, CAddressValue>> info;
-    if (!pAddressIndex || !pAddressIndex->ReadAddress(GetScriptForDestination(DecodeDestination(sss)), info))
+    std::vector<std::pair<CAddressKey, CAddressValue> > info;
+    AddressStat stat; 
+    if (req->GetURI().find("/api/fulladdress/") == std::string::npos) stat.total_max = 5000;
+    if (!ReadAddress(GetScriptForDestination(DecodeDestination(sss)), stat, info))
         return API_ERROR (req, "address " + strURIPart + " not found");
     UniValue coins(UniValue::VARR);
-    CAmount value = 0, receive_amount = 0, send_amount = 0; 
-    int total_in = 0, total_out = 0, total_pos = 0; index *= 200;
-    std::sort(info.begin(), info.end(), heightSort); 
-    for (auto it : info) {
+    int total_pos = 0; index *= 200;
+    bool only_unspent = req->GetURI().find("/api/unspent/") != std::string::npos;
+    int hei = chainActive.Height();
+    int nCoinbaseMaturity = Params().GetConsensus().nCoinbaseMaturity(hei); 
+    for (auto& it : info) {
+        bool isspent = it.second.spend_height != 0;
+        if (only_unspent && isspent) continue;
+        if (only_unspent && it.second.iscoinbase && (hei - it.second.height < nCoinbaseMaturity)) continue;
         UniValue output(UniValue::VOBJ);
-        total_in++;
-        receive_amount += it.second.value;
         output.pushKV("value", ValueFromAmount(it.second.value));
         output.pushKV("tx_hash", it.first.out.hash.GetHex());
         output.pushKV("tx_out", (int64_t)it.first.out.n);
-        output.pushKV("tx_height", (int64_t)it.second.height);
+        output.pushKV("height", (int64_t)it.second.height);
         const CBlockIndex* pi = chainActive[it.second.height];
-        if (pi) output.pushKV("tx_time", pi->GetBlockTime());
-        if (it.second.spend_height == 0) {
-            output.pushKV("isspent", false);
-            value += it.second.value;
-        } else {
-            total_out++;
-            send_amount += it.second.value;
-            output.pushKV("isspent", true);
+        if (pi) output.pushKV("time", pi->GetBlockTime());
+        output.pushKV("script", HexStr(it.first.script.begin(), it.first.script.end()));
+        if (isspent) {
             output.pushKV("spent_tx_hash", it.second.spend_hash.GetHex());
             output.pushKV("spent_tx_out", (int64_t)it.second.spend_n);
-            output.pushKV("spent_tx_height", (int64_t)it.second.spend_height);
+            output.pushKV("spent_height", (int64_t)it.second.spend_height);
             const CBlockIndex* pi = chainActive[it.second.spend_height];
-            if (pi) output.pushKV("spent_tx_time", pi->GetBlockTime());
+            if (pi) output.pushKV("spent_time", pi->GetBlockTime());
         }
         total_pos++;
         if ((index <= total_pos) && (total_pos < index + 200)) coins.push_back(output);
+        if (total_pos > index + 200) break;
     }
     UniValue objTx(UniValue::VOBJ);
     objTx.pushKV("address", sss);
-    objTx.pushKV("value", ValueFromAmount(value));
-    objTx.pushKV("receive_count", total_in);
-    objTx.pushKV("send_count", total_out);
-    objTx.pushKV("receive_amount", ValueFromAmount(receive_amount));
-    objTx.pushKV("send_amount", ValueFromAmount(send_amount));
-    objTx.pushKV("start_offset", index);
+    objTx.pushKV("value", ValueFromAmount(stat.receive_amount - stat.send_amount));
+    if (!only_unspent) {
+        objTx.pushKV("receive_count", stat.total_in);
+        objTx.pushKV("send_count", stat.total_out);
+        objTx.pushKV("receive_amount", ValueFromAmount(stat.receive_amount));
+        objTx.pushKV("send_amount", ValueFromAmount(stat.send_amount));
+    }
+    objTx.pushKV("offset", index);
+    objTx.pushKV("count", stat.total_in + 
+        ((stat.total_max > 0) && (stat.total_out > stat.total_max) ? stat.total_max : stat.total_out));
+    objTx.pushKV("height", (int64_t)chainActive.Height());
     objTx.pushKV("coins", coins);
     return API_OK (req, objTx);
 }
@@ -1004,7 +1019,9 @@ static const struct {
       {"/api/header/", api_header},     // start_hash, start_hash/num_header, start_index, start_index/num_header
       {"/api/block/", api_block},       // hash, index
       {"/api/tx/", api_tx},             // hash
+      {"/api/fulladdress/", api_address},   // address
       {"/api/address/", api_address},   // address
+      {"/api/unspent/", api_address},   // unspent
       {"/api/send/", api_send},         // TX HEX
 };
 

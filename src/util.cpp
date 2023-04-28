@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -1212,10 +1212,10 @@ std::string CopyrightHolders(const std::string& strPrefix)
     if (strprintf(COPYRIGHT_HOLDERS, COPYRIGHT_HOLDERS_SUBSTITUTION).find("Bitcoin Core") == std::string::npos) {
         strCopyrightHolders.replace(strCopyrightHolders.find("2009"), sizeof("2009")-1, "2019"); 
         std::string strPrefix1 = strPrefix;
-        strPrefix1.replace(strPrefix1.find("2021"), sizeof("2021")-1, "2019");
+        strPrefix1.replace(strPrefix1.find("2023"), sizeof("2023")-1, "2019");
         strCopyrightHolders += "\n" + strPrefix1 + "The Dogecoin Core developers";
         std::string strPrefix2 = strPrefix;
-        strPrefix2.replace(strPrefix2.find("2021"), sizeof("2021")-1, "2018");
+        strPrefix2.replace(strPrefix2.find("2023"), sizeof("2023")-1, "2018");
         strCopyrightHolders += "\n" + strPrefix2 + "The Bitcoin Core developers";
     }
     return strCopyrightHolders;

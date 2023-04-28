@@ -1,6 +1,6 @@
 // Copyright (c) 2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -327,15 +327,20 @@ UniValue getaddressbalance(const JSONRPCRequest& request)
     if (!getAddressesFromParams(request.params, addresses)) {
         throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "Invalid address");
     }
-    std::vector<std::pair<CAddressKey, CAddressValue>> info;
+    std::vector<std::pair<CAddressKey, CAddressValue> > info;
+    AddressStat stat; stat.total_max = 100; 
     for (auto it : addresses) {
-        if (!pAddressIndex || !pAddressIndex->ReadAddress(it, info))
+        if (!ReadAddress(it, stat, info))
             throw JSONRPCError(RPC_INVALID_ADDRESS_OR_KEY, "No information available for address");
     }
+
     UniValue result(UniValue::VARR);
-    for (auto it : info) {
+    for (auto& it : info) {
         UniValue output(UniValue::VOBJ);
-        output.pushKV("address", it.first.GetAddr(true));
+        CTxDestination ar;
+        if (ExtractDestination (it.first.script, ar)) output.pushKV("address", EncodeDestination(ar));
+        output.pushKV("script", HexStr(it.first.script.begin(), it.first.script.end()));
+        if (it.second.iscoinbase) output.pushKV("coinbase", "true");
         output.pushKV("value", ValueFromAmount(it.second.value));
         output.pushKV("from", strprintf("[%d] %s:%d", it.second.height, it.first.out.hash.ToString(), it.first.out.n));
         if (it.second.spend_height == 0) {

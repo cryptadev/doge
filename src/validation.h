@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -36,8 +36,8 @@
 
 class CBlockIndex;
 class CBlockTreeDB;
+class CBlockAuxDB;
 class CTxIndexDB;
-class CAddressIndexDB;
 class CChainParams;
 class CCoinsViewDB;
 class CInv;
@@ -57,11 +57,11 @@ static const bool DEFAULT_WHITELISTRELAY = true;
 /** Default for -whitelistforcerelay. */
 static const bool DEFAULT_WHITELISTFORCERELAY = true;
 /** Default for -minrelaytxfee, minimum relay fee for transactions */
-static const unsigned int DEFAULT_MIN_RELAY_TX_FEE = 1000;
+static const unsigned int DEFAULT_MIN_RELAY_TX_FEE = 0.001 * COIN;
 //! -maxtxfee default
 static const CAmount DEFAULT_TRANSACTION_MAXFEE = 100 * COIN;
 //! Discourage users to set fees higher than this amount (in satoshis) per kB
-static const CAmount HIGH_TX_FEE_PER_KB = 1 * COIN;
+static const CAmount HIGH_TX_FEE_PER_KB = 10 * COIN;
 //! -maxtxfee will warn if called with a higher fee than this amount (in satoshis)
 static const CAmount HIGH_MAX_TX_FEE = 100 * HIGH_TX_FEE_PER_KB;
 /** Default for -limitancestorcount, max number of in-mempool ancestors */
@@ -73,7 +73,7 @@ static const unsigned int DEFAULT_DESCENDANT_LIMIT = 25;
 /** Default for -limitdescendantsize, maximum kilobytes of in-mempool descendants */
 static const unsigned int DEFAULT_DESCENDANT_SIZE_LIMIT = 101;
 /** Default for -mempoolexpiry, expiration time for mempool transactions in hours */
-static const unsigned int DEFAULT_MEMPOOL_EXPIRY = 336;
+static const unsigned int DEFAULT_MEMPOOL_EXPIRY = 24;
 /** Maximum kilobytes for transactions to store for processing during reorg */
 static const unsigned int MAX_DISCONNECTED_TX_POOL_SIZE = 20000;
 /** The maximum size of a blk?????.dat file (since 0.8) */
@@ -447,9 +447,8 @@ extern std::unique_ptr<CCoinsViewCache> pcoinsTip;
 
 /** Global variable that points to the active block tree (protected by cs_main) */
 extern std::unique_ptr<CBlockTreeDB> pblocktree;
-
-extern std::unique_ptr<CTxIndexDB> pTxIndex;
-extern std::unique_ptr<CAddressIndexDB> pAddressIndex;
+extern std::unique_ptr<CBlockAuxDB> pblockaux;
+extern std::unique_ptr<CTxIndexDB> pblocktxindex;
 
 /**
  * Return the spend height, which is one more than the inputs.GetBestBlock().
@@ -484,5 +483,14 @@ inline bool IsBlockPruned(const CBlockIndex* pblockindex)
 /** Check whether a block hash satisfies the proof-of-work requirement specified by nBits */
 bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&);
 bool CheckAuxPowProofOfWork(const CBlockHeader& block, const Consensus::Params& params);
+
+struct AddressStat {
+    CAmount receive_amount, send_amount;
+    int total_in, total_out, total_max;
+
+    AddressStat () : receive_amount(0), send_amount(0), total_in(0), total_out(0), total_max(-1) { }
+};
+
+bool ReadAddress (const CScript& script, AddressStat& stat, std::vector<std::pair<CAddressKey, CAddressValue> >& vec);
 
 #endif // BITCOIN_VALIDATION_H

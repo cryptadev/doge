@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -27,6 +27,7 @@ static const char DB_BLOCK_FILES = 'f';
 static const char DB_TXINDEX = 't';
 static const char DB_BLOCK_INDEX = 'b';
 static const char DB_ADDRESS = 'a';
+static const char DB_BLOCKAUX = 'x';
 
 static const char DB_BEST_BLOCK = 'B';
 static const char DB_HEAD_BLOCKS = 'H';
@@ -239,6 +240,40 @@ bool CBlockTreeDB::WriteBatchSync(const std::vector<std::pair<int, const CBlockF
     return WriteBatch(batch, true);
 }
 
+// CScript, COutpoint  = value, height, spend_tx, spend_in, spend_height
+
+bool CBlockTreeDB::ReadAddress (const CScript& script, std::map<CAddressKey, CAddressValue>& vec) {
+    std::unique_ptr<CDBIterator> pcursor(NewIterator());
+    pcursor->Seek(std::make_pair(DB_ADDRESS, CAddressKey(script, COutPoint())));
+    while (pcursor->Valid()) {
+        std::pair<char, CAddressKey> key;
+        if (pcursor->GetKey(key) && (key.first == DB_ADDRESS) && key.second.script == script) {
+            CAddressValue value;
+            if (pcursor->GetValue(value)) {
+                vec[key.second] = value;
+                pcursor->Next();
+            } else {
+                return error("failed to get address index value");
+            }
+        } else {
+            break;
+        }
+    }
+    return true;
+}
+
+bool CBlockTreeDB::WriteAddresses (const std::map<CAddressKey, CAddressValue>& vec) {
+    CDBBatch batch(*this);
+    for (auto& it : vec) {
+        if (it.second.height == 0) {
+            batch.Erase(std::make_pair(DB_ADDRESS, it.first));
+        } else {
+            batch.Write(std::make_pair(DB_ADDRESS, it.first), it.second);
+        }
+    }
+    return WriteBatch(batch);
+}
+
 bool CBlockTreeDB::WriteFlag(const std::string &name, bool fValue) {
     return Write(std::make_pair(DB_FLAG, name), fValue ? '1' : '0');
 }
@@ -301,56 +336,59 @@ bool CCoinsViewDB::Upgrade() {
 
 // CTxIndexDB
 
-CTxIndexDB::CTxIndexDB(bool fWipe) :
-    CDBWrapper(GetDataDir() / "txs", 32 << 20, false, fWipe) {
+CTxIndexDB::CTxIndexDB(bool fWipe) : Cache(), CacheLock(), CDBWrapper(GetBlocksDir() / "txindex", 16 << 20, false, fWipe) {
 }
 
-bool CTxIndexDB::ReadTxIndex(const uint256 &txid, CDiskTxPos &pos) {
+bool CTxIndexDB::ReadTxIndex (const uint256 &txid, CDiskTxPos &pos) {
+    LOCK(CacheLock);
+    if (Cache.count(txid) > 0) { pos = Cache[txid]; return true; } 
     return Read(std::make_pair(DB_TXINDEX, txid), pos);
 }
 
-bool CTxIndexDB::WriteTxIndex(const std::vector<std::pair<uint256, CDiskTxPos> >&vect) {
+bool CTxIndexDB::WriteTxIndex (const uint256 &txid, const CDiskTxPos &pos) {
+    bool ret = true;
+    if (Cache.size() > 4000) ret = FlushTxIndex ();
+    LOCK(CacheLock);
+    Cache[txid] = pos;
+    return ret;
+}
+
+bool CTxIndexDB::FlushTxIndex () {
+    bool err = false;
+    LOCK(CacheLock);
     CDBBatch batch(*this);
-    for (std::vector<std::pair<uint256,CDiskTxPos> >::const_iterator it=vect.begin(); it!=vect.end(); it++)
-        batch.Write(std::make_pair(DB_TXINDEX, it->first), it->second);
-    return WriteBatch(batch);
+    for (auto& it : Cache)
+        batch.Write(std::make_pair(DB_TXINDEX, it.first), it.second);
+    bool ret = WriteBatch(batch);
+    Cache.clear();
+    return ret;
+};
+
+// CBlockAuxDB
+
+CBlockAuxDB::CBlockAuxDB(bool fWipe) : Cache(), CacheLock(), CDBWrapper(GetBlocksDir() / "auxpow", 16 << 20, false, fWipe) {
 }
 
-// CAddressIndexDB
-// CScript, COutpoint  = value, height, spend_tx, spend_in, spend_height
-
-CAddressIndexDB::CAddressIndexDB(bool fWipe) : 
-    CDBWrapper(GetDataDir() / "addresses", 32 << 20, false, fWipe) {
+bool CBlockAuxDB::ReadBlockAux (const uint256 &txid, CAuxPow &auxpow) {
+    LOCK(CacheLock);
+    if (Cache.count(txid) > 0) { auxpow = Cache[txid]; return true; } 
+    return Read(std::make_pair(DB_BLOCKAUX, txid), auxpow);
 }
 
-bool CAddressIndexDB::WriteAddress (const std::vector<std::pair<CAddressKey, CAddressValue>> &vec) {
+bool CBlockAuxDB::WriteBlockAux (const uint256 &txid, const CAuxPow &auxpow) {
+    bool ret = true;
+    if (Cache.size() > 4000) ret = FlushBlockAux();
+    LOCK(CacheLock);
+    Cache[txid] = auxpow;
+    return ret;
+}
+
+bool CBlockAuxDB::FlushBlockAux () {
+    LOCK(CacheLock);
     CDBBatch batch(*this);
-    for (auto it : vec) {
-        if (it.second.height == 0) {
-            batch.Erase(std::make_pair(DB_ADDRESS, it.first));
-        } else {
-            batch.Write(std::make_pair(DB_ADDRESS, it.first), it.second);
-        }
-    }
-    return WriteBatch(batch);
-}
-
-bool CAddressIndexDB::ReadAddress (const CScript& script, std::vector<std::pair<CAddressKey, CAddressValue>> &vec) {
-    std::unique_ptr<CDBIterator> pcursor(NewIterator());
-    pcursor->Seek(std::make_pair(DB_ADDRESS, CAddressKey(script, COutPoint())));
-    while (pcursor->Valid()) {
-        std::pair<char, CAddressKey> key;
-        if (pcursor->GetKey(key) && (key.first == DB_ADDRESS) && key.second.script == script) {
-            CAddressValue value;
-            if (pcursor->GetValue(value)) {
-                vec.push_back(std::make_pair(key.second, value));
-                pcursor->Next();
-            } else {
-                return error("failed to get address index value");
-            }
-        } else {
-            break;
-        }
-    }
-    return true;
-}
+    for (auto& it : Cache)
+        batch.Write(std::make_pair(DB_BLOCKAUX, it.first), it.second);
+    bool ret = WriteBatch(batch);
+    Cache.clear();
+    return ret;
+};

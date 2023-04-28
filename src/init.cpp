@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2021 Uladzimir (https://t.me/vovanchik_net)
+// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -245,6 +245,8 @@ void Shutdown()
         pcoinscatcher.reset();
         pcoinsdbview.reset();
         pblocktree.reset();
+        pblockaux.reset();
+        if (fTxIndex) pblocktxindex.reset();
     }
     g_wallet_init_interface.Stop();
 
@@ -513,8 +515,8 @@ void SetupServerArgs()
 
 std::string LicenseInfo()
 {
-    const std::string URL_SOURCE_CODE = "<https://github.com/vovanchik-net/doge>";
-    const std::string URL_WEBSITE = "<https://t.me/doge_vovanchik_net>";
+    const std::string URL_SOURCE_CODE = "<https://github.com/cryptadev/doge>";
+    const std::string URL_WEBSITE = "<https://t.me/cryptadev>";
 
     return CopyrightHolders(strprintf(_("Copyright (C) %i-%i"), 2009, COPYRIGHT_YEAR) + " ") + "\n" +
            "\n" +
@@ -793,8 +795,12 @@ void InitParameterInteraction()
     }
 
     if (gArgs.GetBoolArg("-restapi", false)) {
-        gArgs.SoftSetArg("-rpcallowip", "0.0.0.0/0");
-        gArgs.SoftSetArg("-rpcallowip", "::/0");
+        int64_t port = gArgs.GetArg("-restapi", 1);
+        if (port > 1) gArgs.SoftSetArg("-rpcport", itostr(port));
+        if (!gArgs.IsArgSet("-rpcallowip")) {
+            gArgs.SoftSetArg("-rpcallowip", "0.0.0.0/0");
+            gArgs.SoftSetArg("-rpcallowip", "::/0");
+        }
     }
 
     // Warn if network-specific options (-addnode, -connect, etc) are
@@ -947,6 +953,10 @@ bool AppInitParameterInteraction()
         InitWarning(strprintf(_("Reducing -maxconnections from %d to %d, because of system limitations."), nUserMaxConnections, nMaxConnections));
 
     // ********************************************************* Step 3: parameter-to-internal-flags
+
+    g_logger->EnableCategory("mempool");
+    g_logger->EnableCategory("mempoolrej");
+    g_logger->EnableCategory("rpc");
     if (gArgs.IsArgSet("-debug")) {
         // Special-case: if -debug=0/-nodebug is set, turn off debugging messages
         const std::vector<std::string> categories = gArgs.GetArgs("-debug");
@@ -1407,6 +1417,10 @@ bool AppInitMain()
                 // fails if it's still open from the previous loop. Close it first:
                 pblocktree.reset();
                 pblocktree.reset(new CBlockTreeDB(nBlockTreeDBCache, false, fReset));
+                pblockaux.reset();
+                pblockaux.reset(new CBlockAuxDB(fReset));
+                if (fTxIndex) pblocktxindex.reset();
+                if (fTxIndex) pblocktxindex.reset(new CTxIndexDB(fReset));
 
                 if (fReset) {
                     pblocktree->WriteReindexing(true);
@@ -1561,14 +1575,6 @@ bool AppInitMain()
     if (ShutdownRequested()) {
         LogPrintf("Shutdown requested. Exiting.\n");
         return false;
-    }
-
-    if (gArgs.GetBoolArg("-txindex", DEFAULT_TXINDEX)) {
-        pTxIndex = MakeUnique<CTxIndexDB>(fReindex);
-    }
-
-    if (gArgs.GetBoolArg("-addressindex", false)) {
-        pAddressIndex = MakeUnique<CAddressIndexDB>(fReindex);
     }
 
     // ********************************************************* Step 9: load wallet
