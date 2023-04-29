@@ -347,7 +347,7 @@ bool CTxIndexDB::ReadTxIndex (const uint256 &txid, CDiskTxPos &pos) {
 
 bool CTxIndexDB::WriteTxIndex (const uint256 &txid, const CDiskTxPos &pos) {
     bool ret = true;
-    if (Cache.size() > 4000) ret = FlushTxIndex ();
+    if (Cache.size() > 64000) ret = FlushTxIndex ();
     LOCK(CacheLock);
     Cache[txid] = pos;
     return ret;
@@ -377,7 +377,7 @@ bool CBlockAuxDB::ReadBlockAux (const uint256 &txid, CAuxPow &auxpow) {
 
 bool CBlockAuxDB::WriteBlockAux (const uint256 &txid, const CAuxPow &auxpow) {
     bool ret = true;
-    if (Cache.size() > 4000) ret = FlushBlockAux();
+    if (Cache.size() > 64000) ret = FlushBlockAux();
     LOCK(CacheLock);
     Cache[txid] = auxpow;
     return ret;
