@@ -1,6 +1,6 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
-// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
+// Copyright (c) 2023 Uladzimir (t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -905,17 +905,16 @@ bool api_address (HTTPRequest* req, const std::string& strURIPart) {
     }
     if (!IsValidDestination(DecodeDestination(sss))) 
         return API_ERROR (req, "address " + strURIPart + " is invalid");
-    std::vector<std::pair<CAddressKey, CAddressValue> > info;
-    AddressStat stat; 
-    if (req->GetURI().find("/api/fulladdress/") == std::string::npos) stat.total_max = 5000;
-    if (!ReadAddress(GetScriptForDestination(DecodeDestination(sss)), stat, info))
+    AddressInfo info; 
+    if (req->GetURI().find("/api/fulladdress/") == std::string::npos) info.total_max = 5000;
+    if (!GetAddressInfo(GetScriptForDestination(DecodeDestination(sss)), info))
         return API_ERROR (req, "address " + strURIPart + " not found");
     UniValue coins(UniValue::VARR);
     int total_pos = 0; index *= 200;
     bool only_unspent = req->GetURI().find("/api/unspent/") != std::string::npos;
     int hei = chainActive.Height();
     int nCoinbaseMaturity = Params().GetConsensus().nCoinbaseMaturity(hei); 
-    for (auto& it : info) {
+    for (auto& it : info.data) {
         bool isspent = it.second.spend_height != 0;
         if (only_unspent && isspent) continue;
         if (only_unspent && it.second.iscoinbase && (hei - it.second.height < nCoinbaseMaturity)) continue;
@@ -940,16 +939,16 @@ bool api_address (HTTPRequest* req, const std::string& strURIPart) {
     }
     UniValue objTx(UniValue::VOBJ);
     objTx.pushKV("address", sss);
-    objTx.pushKV("value", ValueFromAmount(stat.receive_amount - stat.send_amount));
+    objTx.pushKV("value", ValueFromAmount(info.receive_amount - info.send_amount));
     if (!only_unspent) {
-        objTx.pushKV("receive_count", stat.total_in);
-        objTx.pushKV("send_count", stat.total_out);
-        objTx.pushKV("receive_amount", ValueFromAmount(stat.receive_amount));
-        objTx.pushKV("send_amount", ValueFromAmount(stat.send_amount));
+        objTx.pushKV("receive_count", info.total_in);
+        objTx.pushKV("send_count", info.total_out);
+        objTx.pushKV("receive_amount", ValueFromAmount(info.receive_amount));
+        objTx.pushKV("send_amount", ValueFromAmount(info.send_amount));
     }
     objTx.pushKV("offset", index);
-    objTx.pushKV("count", stat.total_in + 
-        ((stat.total_max > 0) && (stat.total_out > stat.total_max) ? stat.total_max : stat.total_out));
+    objTx.pushKV("count", info.total_in + 
+        ((info.total_max > 0) && (info.total_out > info.total_max) ? info.total_max : info.total_out));
     objTx.pushKV("height", (int64_t)chainActive.Height());
     objTx.pushKV("coins", coins);
     return API_OK (req, objTx);

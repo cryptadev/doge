@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
+// Copyright (c) 2023 Uladzimir (t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -439,6 +439,9 @@ bool ArgsManager::ParseParameters(int argc, const char* const argv[], std::strin
             }
         }
     }
+
+    fs::path curr = fs::current_path();
+    if (fs::exists(curr / ".portable")) SoftSetArg("-datadir", curr.string());
 
     // we do not allow -includeconf from command line, so we clear it here
     auto it = m_override_args.find("-includeconf");

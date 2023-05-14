@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
+// Copyright (c) 2023 Uladzimir (t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -245,8 +245,8 @@ void Shutdown()
         pcoinscatcher.reset();
         pcoinsdbview.reset();
         pblocktree.reset();
-        pblockaux.reset();
         if (fTxIndex) pblocktxindex.reset();
+        if (fAddressIndex) pblockaddressindex.reset();
     }
     g_wallet_init_interface.Stop();
 
@@ -516,7 +516,7 @@ void SetupServerArgs()
 std::string LicenseInfo()
 {
     const std::string URL_SOURCE_CODE = "<https://github.com/cryptadev/doge>";
-    const std::string URL_WEBSITE = "<https://t.me/cryptadev>";
+    const std::string URL_WEBSITE = "<https://doge.vovanchik.net>";
 
     return CopyrightHolders(strprintf(_("Copyright (C) %i-%i"), 2009, COPYRIGHT_YEAR) + " ") + "\n" +
            "\n" +
@@ -953,7 +953,6 @@ bool AppInitParameterInteraction()
         InitWarning(strprintf(_("Reducing -maxconnections from %d to %d, because of system limitations."), nUserMaxConnections, nMaxConnections));
 
     // ********************************************************* Step 3: parameter-to-internal-flags
-
     g_logger->EnableCategory("mempool");
     g_logger->EnableCategory("mempoolrej");
     g_logger->EnableCategory("rpc");
@@ -1417,10 +1416,6 @@ bool AppInitMain()
                 // fails if it's still open from the previous loop. Close it first:
                 pblocktree.reset();
                 pblocktree.reset(new CBlockTreeDB(nBlockTreeDBCache, false, fReset));
-                pblockaux.reset();
-                pblockaux.reset(new CBlockAuxDB(fReset));
-                if (fTxIndex) pblocktxindex.reset();
-                if (fTxIndex) pblocktxindex.reset(new CTxIndexDB(fReset));
 
                 if (fReset) {
                     pblocktree->WriteReindexing(true);
@@ -1439,6 +1434,11 @@ bool AppInitMain()
                     strLoadError = _("Error loading block database");
                     break;
                 }
+
+                if (fTxIndex) pblocktxindex.reset();
+                if (fTxIndex) pblocktxindex.reset(new CTxIndexDB(fReset));
+                if (fAddressIndex) pblockaddressindex.reset();
+                if (fAddressIndex) pblockaddressindex.reset(new CAddressIndexDB(fReset));
 
                 // If the loaded chain has a wrong genesis, bail out immediately
                 // (we're likely using a testnet datadir, or the other way around).

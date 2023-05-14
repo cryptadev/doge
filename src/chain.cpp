@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
+// Copyright (c) 2023 Uladzimir (t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -21,7 +21,7 @@ CBlockHeader CBlockIndex::GetBlockHeader() const {
     header.nNonce         = nNonce;
     if (header.IsAuxpow()) {
         CAuxPow auxpow;
-        if (pblockaux->ReadBlockAux (*phashBlock, auxpow)) {
+        if (pblocktree->ReadAuxPow (*phashBlock, auxpow)) {
             header.auxpow.reset(new CAuxPow());
             *header.auxpow = auxpow;
         } else {
@@ -43,7 +43,7 @@ void CBlockIndex::SetBlockHeader (const CBlockHeader& header) {
     nBits          = header.nBits;
     nNonce         = header.nNonce;
     if (header.IsAuxpow())
-        pblockaux->WriteBlockAux (header.GetHash(), *(header.auxpow));
+        pblocktree->WriteAuxPow (header.GetHash(), *(header.auxpow));
 }
 
 /**

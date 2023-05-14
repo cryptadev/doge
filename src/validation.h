@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
+// Copyright (c) 2023 Uladzimir (t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -36,8 +36,8 @@
 
 class CBlockIndex;
 class CBlockTreeDB;
-class CBlockAuxDB;
 class CTxIndexDB;
+class CAddressIndexDB;
 class CChainParams;
 class CCoinsViewDB;
 class CInv;
@@ -447,8 +447,8 @@ extern std::unique_ptr<CCoinsViewCache> pcoinsTip;
 
 /** Global variable that points to the active block tree (protected by cs_main) */
 extern std::unique_ptr<CBlockTreeDB> pblocktree;
-extern std::unique_ptr<CBlockAuxDB> pblockaux;
 extern std::unique_ptr<CTxIndexDB> pblocktxindex;
+extern std::unique_ptr<CAddressIndexDB> pblockaddressindex;
 
 /**
  * Return the spend height, which is one more than the inputs.GetBestBlock().
@@ -484,13 +484,14 @@ inline bool IsBlockPruned(const CBlockIndex* pblockindex)
 bool CheckProofOfWork(uint256 hash, unsigned int nBits, const Consensus::Params&);
 bool CheckAuxPowProofOfWork(const CBlockHeader& block, const Consensus::Params& params);
 
-struct AddressStat {
+struct AddressInfo {
     CAmount receive_amount, send_amount;
     int total_in, total_out, total_max;
+    std::vector<std::pair<CAddressKey, CAddressValue> > data;
 
-    AddressStat () : receive_amount(0), send_amount(0), total_in(0), total_out(0), total_max(-1) { }
+    AddressInfo () : receive_amount(0), send_amount(0), total_in(0), total_out(0), total_max(-1), data() { }
 };
 
-bool ReadAddress (const CScript& script, AddressStat& stat, std::vector<std::pair<CAddressKey, CAddressValue> >& vec);
+bool GetAddressInfo (const CScript& script, AddressInfo& data);
 
 #endif // BITCOIN_VALIDATION_H

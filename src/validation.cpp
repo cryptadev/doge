@@ -1,7 +1,7 @@
 // Copyright (c) 2009-2010 Satoshi Nakamoto
 // Copyright (c) 2009-2018 The Bitcoin Core developers
 // Copyright (c) 2015 The Dogecoin Core developers
-// Copyright (c) 2020-2023 Uladzimir (https://t.me/cryptadev)
+// Copyright (c) 2023 Uladzimir (t.me/cryptadev)
 // Distributed under the MIT software license, see the accompanying
 // file COPYING or http://www.opensource.org/licenses/mit-license.php.
 
@@ -255,8 +255,8 @@ namespace {
 std::unique_ptr<CCoinsViewDB> pcoinsdbview;
 std::unique_ptr<CCoinsViewCache> pcoinsTip;
 std::unique_ptr<CBlockTreeDB> pblocktree;
-std::unique_ptr<CBlockAuxDB> pblockaux;
 std::unique_ptr<CTxIndexDB> pblocktxindex;
+std::unique_ptr<CAddressIndexDB> pblockaddressindex;
 
 enum class FlushStateMode {
     NONE,
@@ -979,7 +979,7 @@ bool GetTransaction(const uint256& hash, CTransactionRef& txOut, const Consensus
 
         if (fTxIndex) {
             CDiskTxPos postx;
-            if (!pblocktxindex->ReadTxIndex(hash, postx)) return false;
+            if (!pblocktxindex->Read(hash, postx)) return false;
             CAutoFile file(OpenBlockFile(postx, true), SER_DISK, CLIENT_VERSION);
             if (file.IsNull()) return error("%s: OpenBlockFile failed", __func__);
             CBlockHeader header;
@@ -1533,84 +1533,49 @@ static bool AbortNode(CValidationState& state, const std::string& strMessage, co
 
 } // namespace
 
-struct cacheReadValue {
-    int height;
-    AddressStat stat;
-    std::vector<std::pair<CAddressKey, CAddressValue> > data;
-};
-
-std::map<CAddressKey, CAddressValue> historyCacheWrite;
-std::map<CScript, cacheReadValue> historyCacheRead;
+std::map<CScript, std::pair<int, AddressInfo> > historyCache;
 CCriticalSection historyCacheLock;
 
-bool ReadAddress (const CScript& script, AddressStat& stat, std::vector<std::pair<CAddressKey, CAddressValue> > &vec) {
+void CleanAddressInfo (int hei = 0, bool dolock = true) {
+    if (dolock) LOCK(historyCacheLock);
+    auto it1 = historyCache.begin();
+    while (it1 != historyCache.end()) {
+        if (it1->second.first == hei) { ++it1; } else { it1 = historyCache.erase (it1); }
+    }
+}
+
+bool GetAddressInfo (const CScript& script, AddressInfo& data) {
     LOCK(historyCacheLock);
     int hei = chainActive.Height();
-    if (historyCacheRead.count(script) > 0) {
-        auto& item = historyCacheRead[script];
-        if (item.height == hei) {
-            stat = item.stat;
-            vec.insert (vec.end(), item.data.begin(), item.data.end());
+    if (historyCache.count(script) > 0) {
+        auto& item = historyCache[script];
+        if (item.first == hei) {
+            data = item.second;
             return true;
-        } else {
-            historyCacheRead.erase (script);
-            auto it1 = historyCacheRead.begin();
-            while (it1 != historyCacheRead.end()) {
-                if (it1->second.height == hei) { ++it1; } else { it1 = historyCacheRead.erase (it1); }
-            }
-        }
+        } else CleanAddressInfo (hei, false); 
     }
     std::map<CAddressKey, CAddressValue> retmap;
-    if (pblocktree) pblocktree->ReadAddress (script, retmap);
-    for (auto& item : historyCacheWrite)
-        if (item.first.script == script)
-            retmap[item.first] = item.second;
+    if (pblockaddressindex) pblockaddressindex->Read (script, retmap);
     std::vector<std::pair<CAddressKey, CAddressValue> > retvec;
     for (const auto& item : retmap)
-        if (item.second.height > 0)
-            retvec.push_back(std::make_pair(item.first, item.second));
+        retvec.push_back(std::make_pair(item.first, item.second));
     std::sort(retvec.begin(), retvec.end(), 
         [](const std::pair<CAddressKey, CAddressValue>& l, const std::pair<CAddressKey, CAddressValue>& r) {
             return l.second.height > r.second.height; });
-    cacheReadValue crv;
-    crv.height = hei;
-    crv.stat.receive_amount = crv.stat.send_amount = 0;
-    crv.stat.total_in = crv.stat.total_out = 0;
-    crv.stat.total_max = stat.total_max;
-    for (auto& it : retvec) {
-        crv.stat.total_in++;
-        crv.stat.receive_amount += it.second.value;
+    data.receive_amount = data.send_amount = 0;
+    data.total_in = data.total_out = 0;
+    for (const auto& it : retvec) {
+        data.total_in++;
+        data.receive_amount += it.second.value;
         if (it.second.spend_height != 0) {
-            crv.stat.total_out++;
-            crv.stat.send_amount += it.second.value;
+            data.total_out++;
+            data.send_amount += it.second.value;
         }
-        if ((it.second.spend_height != 0) && (stat.total_max > 0) && (crv.stat.total_out > stat.total_max)) continue;
-        crv.data.push_back(std::make_pair(it.first, it.second));
-//        vec.push_back(std::make_pair(it.first, it.second));
+        if ((it.second.spend_height != 0) && (data.total_max > 0) && (data.total_out > data.total_max)) continue;
+        data.data.push_back(std::make_pair(it.first, it.second));
     }
-    stat = crv.stat;
-    vec.insert (vec.end(), crv.data.begin(), crv.data.end());
-    historyCacheRead[script] = crv;
+    historyCache[script] = std::make_pair(hei, data);
     return true;
-}
-
-bool FlushAddresses () {
-    LOCK(historyCacheLock);
-    bool ret = pblocktree->WriteAddresses(historyCacheWrite);
-    historyCacheWrite.clear();
-    int hei = chainActive.Height();
-    auto it1 = historyCacheRead.begin();
-    while (it1 != historyCacheRead.end()) {
-        if (it1->second.height == hei) { ++it1; } else { it1 = historyCacheRead.erase (it1); }
-    }
-    return ret;
-}
-
-void WriteAddresses (const CAddressKey& key, const CAddressValue& value) {
-    int kk = IsInitialBlockDownload() ? 1 << 20 : 1 << 16;
-    if (historyCacheWrite.size() > kk) FlushAddresses();
-    LOCK(historyCacheLock);
-    historyCacheWrite[key] = value;
 }
 
 /**
@@ -1677,7 +1642,7 @@ DisconnectResult CChainState::DisconnectBlock(const CBlock& block, const CBlockI
                 COutPoint out(hash, o);
                 Coin coin;
                 if (fAddressIndex)
-                    WriteAddresses (CAddressKey(tx.vout[o].scriptPubKey, out), CAddressValue());
+                    pblockaddressindex->Write (CAddressKey(tx.vout[o].scriptPubKey, out), CAddressValue());
                 bool is_spent = view.SpendCoin(out, &coin);
                 if (!is_spent || tx.vout[o] != coin.out || pindex->nHeight != coin.nHeight || is_coinbase != coin.fCoinBase) {
                     fClean = false; // transaction output mismatch
@@ -1694,13 +1659,14 @@ DisconnectResult CChainState::DisconnectBlock(const CBlock& block, const CBlockI
             }
             for (unsigned int j = tx.vin.size(); j-- > 0;) {
                 const COutPoint &out = tx.vin[j].prevout;
-                const Coin coin = txundo.vprevout[j];
+                if (fAddressIndex) {
+                    const Coin& coin = txundo.vprevout[j];
+                    pblockaddressindex->Write (CAddressKey(coin.out.scriptPubKey, out),
+                                CAddressValue(coin.out.nValue, coin.nHeight, coin.IsCoinBase()));
+                }
                 int res = ApplyTxInUndo(std::move(txundo.vprevout[j]), view, out);
                 if (res == DISCONNECT_FAILED) return DISCONNECT_FAILED;
                 fClean = fClean && res != DISCONNECT_UNCLEAN;
-                if (!fAddressIndex) continue;
-                WriteAddresses (CAddressKey(coin.out.scriptPubKey, out),
-                            CAddressValue(coin.out.nValue, coin.nHeight, coin.IsCoinBase()));
             }
             // At this point, all of txundo.vprevout should have been moved out.
         }
@@ -1803,7 +1769,7 @@ static bool WriteTxIndexDataForBlock(const CBlock& block, CValidationState& stat
     CDiskTxPos pos(pindex->GetBlockPos(), GetSizeOfCompactSize(block.vtx.size()));
     for (const CTransactionRef& tx : block.vtx)
     {
-        pblocktxindex->WriteTxIndex (tx->GetHash(), pos);
+        pblocktxindex->Write (tx->GetHash(), pos);
         pos.nTxOffset += ::GetSerializeSize(*tx, SER_DISK, CLIENT_VERSION);
     }
     return true;
@@ -1969,7 +1935,7 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
             for (size_t j = 0; j < tx.vin.size(); j++) {
                 if (!fAddressIndex) break;
                 const Coin& coin = view.AccessCoin(tx.vin[j].prevout);
-                WriteAddresses (CAddressKey(coin.out.scriptPubKey, tx.vin[j].prevout), CAddressValue(coin.out.nValue, 
+                pblockaddressindex->Write (CAddressKey(coin.out.scriptPubKey, tx.vin[j].prevout), CAddressValue(coin.out.nValue, 
                             fTxIndex ? coin.nHeight : 0, coin.IsCoinBase(), pindex->nHeight, tx.GetHash(), j));
             }
         }
@@ -1998,7 +1964,7 @@ bool CChainState::ConnectBlock(const CBlock& block, CValidationState& state, CBl
             if (!fAddressIndex) break;
             const CTxOut &out = tx.vout[k];
             if (out.scriptPubKey.IsUnspendable()) continue;
-            WriteAddresses (CAddressKey(out.scriptPubKey, COutPoint(tx.GetHash(), k)), 
+            pblockaddressindex->Write (CAddressKey(out.scriptPubKey, COutPoint(tx.GetHash(), k)), 
                         CAddressValue(out.nValue, pindex->nHeight, tx.IsCoinBase()));
         }
 
@@ -2171,7 +2137,7 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
         bool fCacheLarge = mode == FlushStateMode::PERIODIC && cacheSize > std::max((9 * nTotalSpace) / 10, nTotalSpace - MAX_BLOCK_COINSDB_USAGE * 1024 * 1024);
         // The cache is over the limit, we have to write now.
         bool fCacheCritical = mode == FlushStateMode::IF_NEEDED && cacheSize > nTotalSpace;
-        fCacheCritical |= mode == FlushStateMode::IF_NEEDED && nNow > nLastFlush + (int64_t) 900000000;
+        fCacheCritical |= mode == FlushStateMode::IF_NEEDED && nNow > nLastFlush + (int64_t) 1800000000;
         // It's been a while since we wrote the block index to disk. Do this frequently, so we don't need to redownload after a crash.
         bool fPeriodicWrite = mode == FlushStateMode::PERIODIC && nNow > nLastWrite + (int64_t)DATABASE_WRITE_INTERVAL * 1000000;
         // It's been very long since we flushed the cache. Do this infrequently, to optimize cache usage.
@@ -2199,18 +2165,19 @@ bool static FlushStateToDisk(const CChainParams& chainparams, CValidationState &
                     vBlocks.push_back(*it);
                     setDirtyBlockIndex.erase(it++);
                 }
-                if (!FlushAddresses()) {
-                    return AbortNode(state, "Failed to write to block addresses database");
+                if (!pblocktree->FlushAuxPow()) {
+                    return AbortNode(state, "Failed write aux pow info to database");
                 }
                 if (!pblocktree->WriteBatchSync(vFiles, nLastBlockFile, vBlocks)) {
-                    return AbortNode(state, "Failed to write to block index database");
+                    return AbortNode(state, "Failed write block index to database");
                 }
-                if (fTxIndex && !pblocktxindex->FlushTxIndex()) {
-                    return AbortNode(state, "Failed to write transaction index");
+                if (fTxIndex && !pblocktxindex->Flush()) {
+                    return AbortNode(state, "Failed write transaction index to database");
                 }
-                if (!pblockaux->FlushBlockAux()) {
-                    return AbortNode(state, "Failed to write auxpow data");
+                if (fAddressIndex && !pblockaddressindex->Flush()) {
+                    return AbortNode(state, "Failed write addresses index to database");
                 }
+                CleanAddressInfo ();
             }
             // Finally remove any pruned files
             if (fFlushForPrune)
